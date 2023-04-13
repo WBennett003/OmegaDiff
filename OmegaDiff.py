@@ -366,33 +366,32 @@ class Enzyme:
                 loss.backward()
                 loss_sum += loss.detach()
                 optimizer.step()
+                if batch % 50 == 0:
+                  print(loss_sum / batch)
             
             self.log(epoch, loss_sum/EPOCH_STEPS, x0.detach().cpu(), xt.detach().cpu(), noise.detach().cpu(), y_hat.detach().cpu(), wab)
             schedular.step()                
 
     def log(self, epoch, loss, x0, xt, y, y_hat, wab=False):
-      print(f"Epoch {epoch} : MSE {loss}")
       self.save_weights(self.model_weight_dir+'_'+str(epoch)+'.pt')
-      fig = self.visualise_training(x0, xt, y, y_hat)
+      # img = self.visualise_training(x0, xt, y, y_hat)
 
-      # seq, rxn = self.ds[torch.randint(0, 10000, (1))[0]]
-      # seq_str = self.tokeniser.token_to_string(seq)
-
-      # pred_seq = self.sample()
       if wandb:
         wandb.log(
           {
             "epoch" : epoch,
             "loss" : loss,
-            "train_fig" : wandb.Image(fig)
+            # "train_fig" : wandb.Image(img)
           }
         )
-      
+      print(f"Epoch {epoch} : MSE {loss}")
+
+
     def visualise_training(self, x0, xt, y, y_hat):
       err = (y - y_hat)**2
-      bs = 2 #x0.shape[0]
+      bs = 2 
       cols = ['X0' , 'Xt', 'Y', 'Yh', 'Y-Yh']
-      rows = torch.arange(0,bs)
+      rows = ['0', '1']
 
       fig, ax = plt.subplots(bs, 5, figsize=(15,5))
       
@@ -410,7 +409,8 @@ class Enzyme:
         sns.heatmap(err[i], ax=ax[i, 4])
 
       
-      fig.tight_layout()
+      # fig.tight_layout()
+      plt.close()
       return fig
 
     def save_weights(self, file_dir):
@@ -440,5 +440,5 @@ class Enzyme:
 
 
 if __name__ =='__main__':
-    runner = Enzyme(token_size=23, chem_size=2048, timesteps=200, layers=6, ds_file='OmegaDiff/datasets/2048_1M.h5', embed_weights_file='OmegaDiff/weights/embed.pt', model_weight_dir='/content/drive/My Drive/OmegaDiff')
-    runner.train(EPOCHS=15, EPOCH_SIZE=10, BATCH_SIZE=5, lr=1e-3, s=3, wab=True)
+    runner = Enzyme(token_size=23, chem_size=2048, timesteps=200, layers=1, ds_file='OmegaDiff/datasets/2048_1M.h5', embed_weights_file='OmegaDiff/weights/embed.pt', model_weight_dir='/content/drive/My Drive/OmegaDiff')
+    runner.train(EPOCHS=1, EPOCH_SIZE=4, BATCH_SIZE=2, lr=1e-3, s=3, wab=True)
