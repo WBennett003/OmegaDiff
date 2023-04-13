@@ -434,7 +434,7 @@ class Enzyme:
                 "denoising" : wandb.Video(anim)
             }
             )
-            
+
         print(f"Epoch {epoch} : MSE {loss}")
 
 
@@ -519,6 +519,15 @@ class Enzyme:
         print(f"True : {seq} \n Pred : \n" + '\n'.join(['i'+a for i,a in enumerate(pred_seqs)]))
         return seq, pred_seqs, animation
     
-if __name__ =='__main__':
-    runner = Enzyme(token_size=23, chem_size=10420, timesteps=200, layers=10, ds_file='2048_1M.h5', embed_weights_file='OmegaDiff/weights/embed.pt', unbed_weights_file='OmegaDiff/weights.unbed.pt', model_weight_dir='/content/drive/My Drive/OmegaDiff')
+def test_inference():
+    runner = Enzyme(token_size=23, chem_size=2048, timesteps=200, layers=6, ds_file='2048_1M.h5', embed_weights_file='OmegaDiff/weights/embed.pt', unbed_weights_file='OmegaDiff/weights.unbed.pt', model_weight_dir='/content/drive/My Drive/OmegaDiff')
+    runner.Model.load_state_dict(torch.load('/content/drive/My Drive/OmegaDiff_2.pt'))
+    t, p, anime = runner.evaluate([69, 420], guidence=3, show_steps=True)
+
+def train():
+    runner = Enzyme(token_size=23, chem_size=2048, timesteps=200, layers=6, ds_file='2048_1M.h5', embed_weights_file='OmegaDiff/weights/embed.pt', unbed_weights_file='OmegaDiff/weights.unbed.pt', model_weight_dir='/content/drive/My Drive/OmegaDiff')
+    runner.Model.load_state_dict(torch.load('/content/drive/My Drive/OmegaDiff_2.pt'))
     runner.train(EPOCHS=15, EPOCH_SIZE=5000, BATCH_SIZE=5, lr=1e-1, s=3, wab=True)
+
+if __name__ =='__main__':
+    test_inference()
