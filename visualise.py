@@ -5,7 +5,7 @@ def denoising_animation(X):
     fig = plt.figure()
     ims = []
     for i in range(len(X)):
-        im = plt.imshow(X[i], cmap="magma", animated=True)
+        im = plt.imshow(X[i][0].cpu(), cmap="magma", animated=True, vmin=-4, vmax=4)
         ims.append([im])
 
     animate = animation.ArtistAnimation(fig, ims, interval=50, blit=True, repeat_delay=1000)

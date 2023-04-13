@@ -14,6 +14,8 @@ from omegafold.config import make_config
 
 import visualise
 
+device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+
 class EMBEDDER(torch.nn.Module):
   def __init__(self, token_size, d_model, file_name=''):
     super().__init__()
@@ -170,6 +172,22 @@ class OmegaDiff(nn.Module):
         self.omega_plm = OmegaPLM(cfg)
         self.condition = Conditioner(t_steps, chem_size, hidden_size, d_model, sequence)
 
+    def initalise_plm_weights(self, w_dir='weights/model2.pt'):
+        w = torch.load(w_dir)
+        plm = self.omega_plm.state_dict()
+
+        new_state_dict = {}
+
+        for k in plm.keys():
+            new_state_dict[k] = plm[k]
+
+        for k in plm.keys():
+            if k[:10] == 'omega_plm.':
+                new_state_dict[k[10:]] = w[k]
+        
+
+        self.omega_plm.load_state_dict(new_state_dict)
+
     def forward(self, xt, t, rxn, mask=None, fwd_cfg=None, s=1):
         if mask is None:
             mask = torch.zeros(xt.shape[:2]).to(xt.device)
@@ -191,8 +209,9 @@ class OmegaDiff(nn.Module):
 
 def extract(a, t, x_shape):
     batch_size = t.shape[0]
+    a = a.cpu()
     out = a.gather(-1, t.cpu())
-    return out.reshape(batch_size, *((1,) * (len(x_shape) - 1))).to(t.device)
+    return (out.reshape(batch_size, *((1,) * (len(x_shape) - 1)))).to(t.device)
 
 class Diffusion:
     def __init__(self, timesteps):
@@ -202,10 +221,11 @@ class Diffusion:
         self.alphas = 1. - self.betas
         self.alphas_cumprod = torch.cumprod(self.alphas, axis=0)
         self.alphas_cumprod_prev = torch.nn.functional.pad(self.alphas_cumprod[:-1], (1,0), value=1.0)
+        self.sqrt_recip_alphas = torch.sqrt(1.0 / self.alphas)
 
         self.sqrt_alphas_cumprod = torch.sqrt(self.alphas_cumprod)
         self.sqrt_one_minus_alphas_cumprod = torch.sqrt(1. - self.alphas_cumprod)
-        posterior_varience = self.betas * (1. - self.alphas_cumprod_prev) / (1. - self.alphas_cumprod)
+        self.posterior_varience = self.betas * (1. - self.alphas_cumprod_prev) / (1. - self.alphas_cumprod)
         
     def cosine_beta_schedule(self, s=0.008):
         """
@@ -243,7 +263,7 @@ class Diffusion:
 
 
 class dataset_h5(torch.utils.data.Dataset):
-    def __init__(self, file_path='datasets/2048_1M.h5py', device='cpu') -> None:
+    def __init__(self, file_path='datasets/2048_1M.h5py') -> None:
         super().__init__()
         self.file = h5py.File(file_path, 'r+')
         self.device = device
@@ -268,66 +288,68 @@ class dataset_h5(torch.utils.data.Dataset):
 class Tokeniser:
   def __init__(self):
     self.AA = {
-    "A" : 0,
-    "R" : 1,
-    "N" : 2,
-    "D" : 3,
-    "C" : 4,
-    "Q" : 5,
-    "E" : 6,
-    "G" : 7,
-    "H" : 8,
-    "I" : 9,
-    "L" : 10,
-    "K" : 11,
-    "M" : 12,
-    "F" : 13,
-    "P" : 14,
-    "S" : 15,
-    "T" : 16,
-    "W" : 17,
-    "Y" : 18,
-    "V" : 19,
-    "*" : 20,
-    "-" : 21
+    "-" : 0,
+    "A" : 1,
+    "R" : 2,
+    "N" : 3,
+    "D" : 4,
+    "C" : 5,
+    "Q" : 6,
+    "E" : 7,
+    "G" : 8,
+    "H" : 9,
+    "I" : 10,
+    "L" : 11,
+    "K" : 12,
+    "M" : 13,
+    "F" : 14,
+    "P" : 15,
+    "S" : 16,
+    "T" : 17,
+    "W" : 18,
+    "Y" : 19,
+    "V" : 20,
+    "*" : 21,
+    "?" : 22,
+
     }
     self.inverse_AA = {
-      0 : "A",
-      1 : "R",
-      2 : "N",
-      3 : "D",
-      4 : "C",
-      5 : "Q",
-      6 : "E",
-      7 : "G",
-      8 : "H",
-      9 : "I",
-      10 : "L",
-      11 : "K",
-      12 : "M",
-      13 : "F",
-      14 : "P",
-      15 : "S",
-      16 : "T",
-      17 : "W",
-      18 : "Y",
-      19 : "V",
-      20 : "*",
-      21 : "-",
+      0 : "-",
+      1 : "A",
+      2 : "R",
+      3 : "N",
+      4 : "D",
+      5 : "C",
+      6 : "Q",
+      7 : "E",
+      8 : "G",
+      9 : "H",
+      10 : "I",
+      11 : "L",
+      12 : "K",
+      13: "M",
+      14 : "F",
+      15 : "P",
+      16 : "S",
+      17 : "T",
+      18 : "W",
+      19 : "Y",
+      20 : "V",
+      21 : "*",
       22 : "?",
     }
 
-    def token_to_string(self, tokens):
-      aa = ''
-      for t in tokens:
-        aa += self.inverse_AA[t]
-      return aa
+  def token_to_string(self, tokens):
+    aa = ''
+    for t in tokens:
+      aa += self.inverse_AA[t.item()]
+    return aa
 
-    def string_to_token(self, string):
-      aa = []
-      for char in string:
-        aa.append(self.AA[char])
-      return aa
+  def string_to_token(self, string):
+    aa = []
+    for char in string:
+      aa.append(self.AA[char])
+    return aa
 
     
 
@@ -353,8 +375,8 @@ class Enzyme:
         subbatch_size=1280,
         num_recycle=1,
     )   
-        self.Embedder = EMBEDDER(self.token_size, self.d_model, embed_weights_file)
-        self.Unbedder = Unbedder(self.token_size, self.d_model, self.sequence_length, unbed_weights_file)
+        self.Embedder = EMBEDDER(self.token_size, self.d_model, embed_weights_file).to(self.device)
+        self.Unbedder = Unbedder(self.token_size, self.d_model, self.sequence_length, unbed_weights_file).to(self.device)
         self.Model = OmegaDiff(self.cfg, self.timesteps, self.chem_size, self.chem_size)
         self.Model.to(self.device)
         self.Model.condition.to(self.device)
@@ -369,7 +391,7 @@ class Enzyme:
         loss_func = torch.nn.MSELoss()
 
         if wab:
-          wandb.init(
+            wandb.init(
             # set the wandb project where this run will be logged
             project="OmegaDiff",
             
@@ -385,7 +407,7 @@ class Enzyme:
             "guided multiplier": s,
             })
 
-        z = torch.zeros((BATCH_SIZE, self.sequence_length)).long()
+        z = torch.zeros((BATCH_SIZE, self.sequence_length)).long().to(self.device)
 
         for epoch in range(0, EPOCHS):
             loss_sum = 0
@@ -397,14 +419,14 @@ class Enzyme:
                 Xtokens = torch.maximum(z, Xtokens)
 
                 x0 = self.Embedder(Xtokens)
-                ts = torch.randint(1, self.timesteps, tuple([BATCH_SIZE]))
-                noise = torch.randn(x0.shape)
+                ts = torch.randint(1, self.timesteps, tuple([BATCH_SIZE]), device=self.device)
+                noise = torch.randn(x0.shape, device=self.device)
                 xt = self.diffusion.q_samples(x0, ts, noise)
 
-                xt = xt.to(self.device)
-                ts = ts.to(self.device)
-                noise = noise.to(self.device)
-                rxn = rxn.to(self.device)
+                # xt = xt.to(self.device)
+                # ts = ts.to(self.device)
+                # noise = noise.to(self.device)
+                # rxn = rxn.to(self.device)
 
                 y_hat = self.Model(xt, ts, rxn, fwd_cfg=self.fwd_cfg, s=s)
 
@@ -431,7 +453,7 @@ class Enzyme:
                 "true_seq" : seq,
                 "pred_seq" : pred_seq,
                 "train_fig" : wandb.Image(img),
-                "denoising" : wandb.Video(anim)
+                "denoising" : wandb.Video("denoise.gif")
             }
             )
 
@@ -469,7 +491,7 @@ class Enzyme:
     def sample(self, rxn, t, mask=None, xt=None, guidance=1):
         batch_size = rxn.shape[0]
         if len(rxn.shape) > 1:
-            batch_size = rxn.shape[1]
+            batch_size = rxn.shape[0]
         else:
             batch_size = 1
             rxn = rxn.reshape((batch_size, rxn.shape[0]))
@@ -477,10 +499,10 @@ class Enzyme:
         if xt is None:
              xt = torch.randn((batch_size, self.sequence_length, self.d_model))           
         
-        t = torch.tensor([t]).repeat(batch_size)
+        t = torch.tensor([t]).repeat(batch_size).to(self.device)
         with torch.no_grad():
             noise = self.Model(xt, t, rxn, mask, self.fwd_cfg, s=guidance)
-        xt = self.diffusion.p_sample(xt, t, t, noise)
+        xt = self.diffusion.p_sample(xt, t, 1, noise)
         return xt
     
     def sample_loop(self, rxn, t, mask=None, xt=None, guidance=1, save_steps=None):
@@ -498,16 +520,22 @@ class Enzyme:
         aas = [self.tokeniser.token_to_string(tokens[i]) for i in range(tokens.shape[0])]
         return aas  
     
-    def inference(self, rxn, timesteps, mask=None, guidance=1, batch_size=2):
+    def inference(self, rxn, timesteps, mask=None, guidance=1, batch_size=2, show_steps=False):
+        if mask is None:
+          mask = torch.zeros((rxn.shape[0], self.sequence_length)).to(self.device)
         xt = torch.randn((batch_size, self.sequence_length, self.d_model)).to(self.device)
-        x0, _ = self.sample_loop(rxn, timesteps, mask, xt, guidance)
-        tokens = self.Unbedder(x0)
+        x0, steps = self.sample_loop(rxn, timesteps, mask, xt, guidance, save_steps=show_steps)
+        with torch.no_grad():
+          self.Unbedder
+          tokens = self.Unbedder(x0).argmax(-1)
         aas = [self.tokeniser.token_to_string(tokens[i]) for i in range(tokens.shape[0])]
-        return aas  
+        return aas, steps  
 
     def evaluate(self, idxs, mask=None, guidance=1, show_steps=False, save_dir='denoise.gif'):
         seq, rxn = self.ds[idxs]
+        rxn = rxn.to(self.device)
         seq = [self.tokeniser.token_to_string(seq[i]) for i in range(seq.shape[0])]
+        print(seq)
         pred_seqs, steps = self.inference(rxn, self.timesteps, guidance=guidance, show_steps=show_steps)
         
         if len(steps) > 0:
@@ -520,14 +548,15 @@ class Enzyme:
         return seq, pred_seqs, animation
     
 def test_inference():
-    runner = Enzyme(token_size=23, chem_size=2048, timesteps=200, layers=6, ds_file='2048_1M.h5', embed_weights_file='OmegaDiff/weights/embed.pt', unbed_weights_file='OmegaDiff/weights.unbed.pt', model_weight_dir='/content/drive/My Drive/OmegaDiff')
+    runner = Enzyme(token_size=23, chem_size=2048, timesteps=200, layers=6, ds_file='2048_1M.h5', embed_weights_file='OmegaDiff/weights/embed.pt', unbed_weights_file='OmegaDiff/weights/unbed.pt', model_weight_dir='/content/drive/My Drive/OmegaDiff')
     runner.Model.load_state_dict(torch.load('/content/drive/My Drive/OmegaDiff_2.pt'))
-    t, p, anime = runner.evaluate([69, 420], guidence=3, show_steps=True)
+    t, p, anime = runner.evaluate([69, 420], guidance=3, show_steps=True)
 
 def train():
-    runner = Enzyme(token_size=23, chem_size=2048, timesteps=200, layers=6, ds_file='2048_1M.h5', embed_weights_file='OmegaDiff/weights/embed.pt', unbed_weights_file='OmegaDiff/weights.unbed.pt', model_weight_dir='/content/drive/My Drive/OmegaDiff')
-    runner.Model.load_state_dict(torch.load('/content/drive/My Drive/OmegaDiff_2.pt'))
-    runner.train(EPOCHS=15, EPOCH_SIZE=5000, BATCH_SIZE=5, lr=1e-1, s=3, wab=True)
+    runner = Enzyme(token_size=23, chem_size=10240, timesteps=200, layers=10, ds_file='10240_2_true_true_500k.h5', embed_weights_file='OmegaDiff/weights/embed.pt', unbed_weights_file='OmegaDiff/weights/unbed.pt', model_weight_dir='/content/drive/My Drive/OmegaDiff_10240')
+    # runner.Model.load_state_dict(torch.load('/content/drive/My Drive/OmegaDiff_2.pt'))
+    runner.Model.initalise_plm_weights('release2.pt')
+    runner.train(EPOCHS=30, EPOCH_SIZE=5000, BATCH_SIZE=4, lr=1e-3, s=1, wab=False)
 
 if __name__ =='__main__':
-    test_inference()
+    train()
