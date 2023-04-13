@@ -3,25 +3,29 @@ import torch.nn as nn
 import torch.nn.functional as F
 import math
 import h5py
+import wandb
 
 import argparse
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 from omegafold.omegaplm_diffusion import OmegaPLM
 from omegafold.config import make_config
 
-class Embedder(nn.Module):
-    def __init__(self, token_size=23, d_model=1280, file_name='weights/embed.pt'):
-        super().__init__()
-        self.embed = nn.Embedding(token_size, d_model)
+class EMBEDDER(torch.nn.Module):
+  def __init__(self, token_size, d_model, file_name=''):
+    super().__init__()
+    self.layer = torch.nn.Embedding(token_size, d_model)
+    self.load_state_dict(torch.load(file_name))
+    self.freeze_weights()
 
-        self.load_state_dict(torch.load(file_name))
-    
-    def freeze_weights(self):
-        for param in self.parameters():
-            param.requires_grad = False
+  def forward(self, x):
+    return self.layer(x)
 
-    def forward(self, x):
-        return self.embed(x)
+  def freeze_weights(self):
+      for param in self.parameters():
+          param.requires_grad = False
+
 
 class Unbedder(nn.Module):
     def __init__(self, token_size=23, d_model=1280):
@@ -52,6 +56,7 @@ class TimestepEmbedder(nn.Module):
             nn.Linear(hidden_size, hidden_size, bias=True),
         )
         self.frequency_embedding_size = frequency_embedding_size
+
     @staticmethod
     def timestep_embedding(t, dim, max_period=10000):
         """
@@ -79,7 +84,8 @@ class TimestepEmbedder(nn.Module):
 
 class Conditioner(torch.nn.Module):
     def __init__(self, t_steps, chem_size=2048, hidden_size=2048, d_model=1280, sequnece_length=1280):
-        self.chem_size = chem_size,
+        super().__init__()
+        self.chem_size = chem_size
         self.sequnece_length = sequnece_length
 
         self.mask = torch.zeros(sequnece_length)
@@ -118,25 +124,25 @@ class OmegaDiff(nn.Module):
     def __init__(self, cfg, t_steps=200, chem_size=2048, hidden_size=2048):
         super().__init__()
         
-        d_model = cfg.nodes
-        sequence = cfg.nodes
+        d_model = cfg.node
+        sequence = cfg.node
 
         self.omega_plm = OmegaPLM(cfg)
         self.condition = Conditioner(t_steps, chem_size, hidden_size, d_model, sequence)
 
     def forward(self, xt, t, rxn, mask=None, fwd_cfg=None, s=1):
         if mask is None:
-            mask = torch.zeros(xt.shape)
+            mask = torch.zeros(xt.shape[:2])
 
         cond = self.condition(rxn, t, mask)
-        xt = self.omega_plm(xt, mask, cond, fwd_cfg)
-        xt_null = self.null_forward(xt, t, mask, fwd_cfg)
-        xt = xt_null + s * (xt - xt_null)
-        return xt
+        ei = self.omega_plm(xt, mask, cond, fwd_cfg)
+        ej = self.null_forward(xt, t, mask, fwd_cfg)
+        eh = ej + s * (ei - ej)
+        return eh
     
     def null_forward(self, xt, t, mask=None, fwd_cfg=None):
         if mask is None:
-            mask = torch.zeros(xt.shape)
+            mask = torch.zeros(xt.shape[:2])
 
         cond = self.condition.null_forward(t)
         xt = self.omega_plm(xt, mask, cond, fwd_cfg)
@@ -186,14 +192,14 @@ class Diffusion:
         sqrt_one_minus_alphas_cumprod = extract(self.sqrt_one_minus_alphas_cumprod, t, x_t.shape)
         sqrt_recip_alphas_t = extract(self.sqrt_recip_alphas, t, x_t.shape)
         
-        model_mean = sqrt_recip_alphas_t * (x_t - betas_t * pred_noise / sqrt_one_minus_alphas_cumprod_t)
+        model_mean = sqrt_recip_alphas_t * (x_t - betas_t * pred_noise / sqrt_one_minus_alphas_cumprod)
 
         if t_index == 0:
             return model_mean
         else:
             posterior_variance_t = extract(self.posterior_varience, t, pred_noise.shape)
             noise = torch.randn_like(pred_noise)
-            return model_mean + torch.sqrt(posterior_varience_t) * noise
+            return model_mean + torch.sqrt(posterior_variance_t) * noise
 
 
 class dataset_h5(torch.utils.data.Dataset):
@@ -219,41 +225,131 @@ class dataset_h5(torch.utils.data.Dataset):
         
         )
 
+class Tokeniser:
+  def __init__(self):
+    self.AA = {
+    "A" : 0,
+    "R" : 1,
+    "N" : 2,
+    "D" : 3,
+    "C" : 4,
+    "Q" : 5,
+    "E" : 6,
+    "G" : 7,
+    "H" : 8,
+    "I" : 9,
+    "L" : 10,
+    "K" : 11,
+    "M" : 12,
+    "F" : 13,
+    "P" : 14,
+    "S" : 15,
+    "T" : 16,
+    "W" : 17,
+    "Y" : 18,
+    "V" : 19,
+    "*" : 20,
+    "-" : 21
+    }
+    self.inverse_AA = {
+      0 : "A",
+      1 : "R",
+      2 : "N",
+      3 : "D",
+      4 : "C",
+      5 : "Q",
+      6 : "E",
+      7 : "G",
+      8 : "H",
+      9 : "I",
+      10 : "L",
+      11 : "K",
+      12 : "M",
+      13 : "F",
+      14 : "P",
+      15 : "S",
+      16 : "T",
+      17 : "W",
+      18 : "Y",
+      19 : "V",
+      20 : "*",
+      21 : "-"
+    }
+
+    def token_to_string(self, tokens):
+      aa = ''
+      for t in tokens:
+        aa += self.inverse_AA[t]
+      return aa
+
+    def string_to_token(self, string):
+      aa = []
+      for char in string:
+        aa.append(self.AA[char])
+      return aa
+
+    
+
 class Enzyme:
-    def __init__(self, token_size=23, chem_size=2048, timesteps=200, sequence_length=1280, ds_file='datasets/2048_1M.h5', embed_weight_file='weights/embed.pt'):
-        self.device = torch.device('cuda') if torch.cuda.is_avaliable() else torch.device('cpu')
+    def __init__(self, token_size=23, chem_size=2048, timesteps=200, sequence_length=1280, layers=1, ds_file='datasets/2048_1M.h5', embed_weights_file='weights/embed.pt', model_weight_dir='weights/OmegaDiff.pt'):
+        self.device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
         self.token_size = token_size
         self.chem_size = chem_size
         self.timesteps = timesteps
         self.sequence_length = sequence_length
+        self.model_weight_dir = model_weight_dir
 
         self.diffusion = Diffusion(timesteps)
+        self.tokeniser = Tokeniser()
         self.ds = dataset_h5(ds_file)
         
         self.cfg = make_config().plm
+        self.cfg.edge = layers
 
         self.d_model = self.cfg.node
 
         self.fwd_cfg = argparse.Namespace(
-        subbatch_size=1000,
+        subbatch_size=1280,
         num_recycle=1,
     )   
-        self.Embedder = Embedder(self.token_size, self.d_model, embed_weight_file)
+        self.Embedder = EMBEDDER(self.token_size, self.d_model, embed_weights_file)
         self.Model = OmegaDiff(self.cfg, self.timesteps, self.chem_size, self.chem_size)
 
-    def train(self, EPOCHS=15, EPOCH_SIZE=10000, BATCH_SIZE=5, lr=1e-3, s=3):
+    def train(self, EPOCHS=15, EPOCH_SIZE=10000, BATCH_SIZE=5, lr=1e-3, s=3, wab=False):
         EPOCH_STEPS = int(EPOCH_SIZE / BATCH_SIZE)
         EPOCH_SIZE = EPOCH_STEPS * BATCH_SIZE
         length = len(self.ds)
         optimizer = torch.optim.AdamW(self.Model.parameters())
         schedular = torch.optim.lr_scheduler.OneCycleLR(optimizer, lr, EPOCHS)
+        loss_func = torch.nn.MSELoss()
+
+        if wab:
+          wandb.init(
+            # set the wandb project where this run will be logged
+            project="OmegaDiff",
+            
+            # track hyperparameters and run metadata
+            config={
+            "learning_rate": lr,
+            "dataset": "2048_1M.h5",
+            "epochs": EPOCHS,
+            "epoch_size": EPOCH_SIZE,
+            "batch_size": BATCH_SIZE,
+            "layers": self.cfg.edge,
+            "chem_size": self.chem_size,
+            "guided multiplier": s,
+            })
+
+        z = torch.zeros((BATCH_SIZE, self.sequence_length)).long()
 
         for epoch in range(0, EPOCHS):
+            loss_sum = 0
             batch_idx = torch.randperm(length)[:EPOCH_SIZE]
             for batch in range(1, EPOCH_STEPS):
                 optimizer.zero_grad()
-                bi = batch_idx[(batch-1)*BATCH_SIZE:batch*BATCH_SIZE].sort()
+                bi, _ = torch.sort(batch_idx[(batch-1)*BATCH_SIZE:batch*BATCH_SIZE])
                 Xtokens, rxn = self.ds[bi]
+                Xtokens = torch.maximum(z, Xtokens)
 
                 x0 = self.Embedder(Xtokens)
                 ts = torch.randint(1, self.timesteps, tuple([BATCH_SIZE]))
@@ -266,11 +362,62 @@ class Enzyme:
 
                 y_hat = self.Model(xt, ts, rxn, fwd_cfg=self.fwd_cfg, s=s)
 
-                loss = F.mse_loss(y_hat, noise)
-                loss.backwards()
+                loss = loss_func(y_hat, noise)
+                loss.backward()
+                loss_sum += loss.detach()
                 optimizer.step()
             
+            self.log(epoch, loss_sum/EPOCH_STEPS, x0.detach().cpu(), xt.detach().cpu(), noise.detach().cpu(), y_hat.detach().cpu(), wab)
             schedular.step()                
+
+    def log(self, epoch, loss, x0, xt, y, y_hat, wab=False):
+      print(f"Epoch {epoch} : MSE {loss}")
+      self.save_weights(self.model_weight_dir+'_'+str(epoch)+'.pt')
+      fig = self.visualise_training(x0, xt, y, y_hat)
+
+      # seq, rxn = self.ds[torch.randint(0, 10000, (1))[0]]
+      # seq_str = self.tokeniser.token_to_string(seq)
+
+      # pred_seq = self.sample()
+      if wandb:
+        wandb.log(
+          {
+            "epoch" : epoch,
+            "loss" : loss,
+            "train_fig" : wandb.Image(fig)
+          }
+        )
+      
+    def visualise_training(self, x0, xt, y, y_hat):
+      err = (y - y_hat)**2
+      bs = 2 #x0.shape[0]
+      cols = ['X0' , 'Xt', 'Y', 'Yh', 'Y-Yh']
+      rows = torch.arange(0,bs)
+
+      fig, ax = plt.subplots(bs, 5, figsize=(15,5))
+      
+      for a, col in zip(ax[0], cols):
+          a.set_title(col)
+
+      for a, row in zip(ax[:,0], rows):
+          a.set_ylabel(row, rotation=0, size='large')
+      
+      for i in range(bs):
+        sns.heatmap(x0[i], ax=ax[i, 0])
+        sns.heatmap(xt[i], ax=ax[i, 1])
+        sns.heatmap(y[i], ax=ax[i, 2])
+        sns.heatmap(y_hat[i], ax=ax[i, 3])
+        sns.heatmap(err[i], ax=ax[i, 4])
+
+      
+      fig.tight_layout()
+      return fig
+
+    def save_weights(self, file_dir):
+      torch.save(self.Model.state_dict(), file_dir)
+
+    def load_weights(self, file_dir):
+      self.Model.load_state_dict(torch.load(file_dir))
 
     def sample(self, rxn, timesteps, mask=None, xt=None, guidance=1):
         batch_size = rxn.shape[0]
@@ -293,5 +440,5 @@ class Enzyme:
 
 
 if __name__ =='__main__':
-    runner = Enzyme(token_size=23, chem_size=2048, timesteps=200, ds_file='dataset/test.h5', embed_weights_file='weights/embed.pt')
-    runner.train(EPOCHS=15, EPOCH_SIZE=10000, BATCH_SIZE=5, lr=1e-3, s=3)
+    runner = Enzyme(token_size=23, chem_size=2048, timesteps=200, layers=6, ds_file='OmegaDiff/datasets/2048_1M.h5', embed_weights_file='OmegaDiff/weights/embed.pt', model_weight_dir='/content/drive/My Drive/OmegaDiff')
+    runner.train(EPOCHS=15, EPOCH_SIZE=10, BATCH_SIZE=5, lr=1e-3, s=3, wab=True)

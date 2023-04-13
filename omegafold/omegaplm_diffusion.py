@@ -200,7 +200,7 @@ class OmegaPLM(modules.OFModule):
 
     def forward(
             self,
-            nodes: torch.Tensor,
+            node: torch.Tensor,
             mask: torch.Tensor,
             cond: torch.Tensor,
             fwd_cfg: typing.Optional[argparse.Namespace]
@@ -217,12 +217,13 @@ class OmegaPLM(modules.OFModule):
         Returns:
 
         """
+        # print(node.shape, cond.shape, mask.shape)
         qk_scaling = _get_qk_scaling(mask.sum(-1), self.cfg.attn_dim)
         qk_scaling = qk_scaling[..., None, None]
         bias = utils.mask2bias(mask[..., None, :])
 
         # node = self.input_embedding(tokens)
-        node *= self._get_finetuning_scale(mask, nodes)
+        # node *= self._get_finetuning_scale(mask, node)
         # edges = torch.empty(
         #     len(self.layers), mask.shape[-1], mask.shape[-1],
         #     dtype=node.dtype, device=node.device
