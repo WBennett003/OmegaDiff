@@ -28,11 +28,13 @@ class EMBEDDER(torch.nn.Module):
 
 
 class Unbedder(nn.Module):
-    def __init__(self, token_size=23, d_model=1280):
+    def __init__(self, token_size=23, d_model=1280, sequence_length=1280, unbed_weight_file=''):
         super().__init__()
+        self.token_size = token_size
+        self.d_model = d_model
+        self.sequence_length = sequence_length
+
         self.mlp = nn.Sequential(
-            nn.Linear(d_model, d_model),
-            nn.SiLU(),
             nn.Linear(d_model, d_model),
             nn.SiLU(),
             nn.Linear(d_model, token_size),
@@ -43,6 +45,40 @@ class Unbedder(nn.Module):
     def forward(self, x):
         x = self.mlp(x)
         return x.softmax(-1) #give probabilities of each residue
+
+    def train(self, ds, EPOCHS, EPOCH_SIZE, BATCH_SIZE, embedder, lr=1e-3):
+        EPOCH_STEPS = int(EPOCH_SIZE / BATCH_SIZE)
+        EPOCH_SIZE = EPOCH_STEPS * BATCH_SIZE
+        length = len(self.ds)
+        optimizer = torch.optim.AdamW(self.parameters())
+        schedular = torch.optim.lr_scheduler.OneCycleLR(optimizer, lr, EPOCHS)
+        loss_func = torch.nn.MSELoss()
+
+        z = torch.zeros((BATCH_SIZE, self.sequence_length)).long()
+
+        for epoch in range(0, EPOCHS):
+            loss_sum = 0
+            batch_idx = torch.randperm(length)[:EPOCH_SIZE]
+            for batch in range(1, EPOCH_STEPS):
+                optimizer.zero_grad()
+                bi, _ = torch.sort(batch_idx[(batch-1)*BATCH_SIZE:batch*BATCH_SIZE])
+                Xtokens, rxn = self.ds[bi]
+                Xtokens = torch.maximum(z, Xtokens)
+
+                x0 = embedder(Xtokens)
+
+                y_hat = self.forward(x0)
+                loss = loss_func(y_hat, Xtokens)
+                loss.backward()
+                loss_sum += loss.detach()
+                optimizer.step()
+                if batch % 50 == 0:
+                  print(batch / EPOCH_STEPS, loss_sum / batch)
+            print(epoch, loss_sum / EPOCH_STEPS)            
+            schedular.step()     
+
+        
+
 
 class TimestepEmbedder(nn.Module):
     """
@@ -291,7 +327,7 @@ class Tokeniser:
     
 
 class Enzyme:
-    def __init__(self, token_size=23, chem_size=2048, timesteps=200, sequence_length=1280, layers=1, ds_file='datasets/2048_1M.h5', embed_weights_file='weights/embed.pt', model_weight_dir='weights/OmegaDiff.pt'):
+    def __init__(self, token_size=23, chem_size=2048, timesteps=200, sequence_length=1280, layers=1, ds_file='datasets/2048_1M.h5', embed_weights_file='weights/embed.pt', unbed_weights_file='weights/unbed.pt', model_weight_dir='weights/OmegaDiff.pt'):
         self.device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
         self.token_size = token_size
         self.chem_size = chem_size
@@ -313,6 +349,7 @@ class Enzyme:
         num_recycle=1,
     )   
         self.Embedder = EMBEDDER(self.token_size, self.d_model, embed_weights_file)
+        self.Unbedder = Unbedder(self.token_size, self.d_model, unbed_weights_file)
         self.Model = OmegaDiff(self.cfg, self.timesteps, self.chem_size, self.chem_size)
         self.Model.to(self.device)
         self.Model.condition.to(self.device)
@@ -371,21 +408,21 @@ class Enzyme:
                 loss_sum += loss.detach()
                 optimizer.step()
                 if batch % 50 == 0:
-                  print(loss_sum / batch)
+                  print(batch / EPOCH_STEPS, loss_sum / batch)
             
             self.log(epoch, loss_sum/EPOCH_STEPS, x0.detach().cpu(), xt.detach().cpu(), noise.detach().cpu(), y_hat.detach().cpu(), wab)
             schedular.step()                
 
     def log(self, epoch, loss, x0, xt, y, y_hat, wab=False):
       self.save_weights(self.model_weight_dir+'_'+str(epoch)+'.pt')
-      # img = self.visualise_training(x0, xt, y, y_hat)
+      img = self.visualise_training(x0, xt, y, y_hat)
 
       if wab:
         wandb.log(
           {
             "epoch" : epoch,
             "loss" : loss,
-            # "train_fig" : wandb.Image(img)
+            "train_fig" : wandb.Image(img)
           }
         )
       print(f"Epoch {epoch} : MSE {loss}")
@@ -395,16 +432,12 @@ class Enzyme:
       err = (y - y_hat)**2
       bs = 2 
       cols = ['X0' , 'Xt', 'Y', 'Yh', 'Y-Yh']
-      rows = ['0', '1']
 
       fig, ax = plt.subplots(bs, 5, figsize=(15,5))
       
       for a, col in zip(ax[0], cols):
           a.set_title(col)
 
-      for a, row in zip(ax[:,0], rows):
-          a.set_ylabel(row, rotation=0, size='large')
-      
       for i in range(bs):
         sns.heatmap(x0[i], ax=ax[i, 0])
         sns.heatmap(xt[i], ax=ax[i, 1])
@@ -413,7 +446,7 @@ class Enzyme:
         sns.heatmap(err[i], ax=ax[i, 4])
 
       
-      # fig.tight_layout()
+      fig.tight_layout()
       plt.close()
       return fig
 
@@ -423,7 +456,7 @@ class Enzyme:
     def load_weights(self, file_dir):
       self.Model.load_state_dict(torch.load(file_dir))
 
-    def sample(self, rxn, timesteps, mask=None, xt=None, guidance=1):
+    def sample(self, rxn, t, mask=None, xt=None, guidance=1):
         batch_size = rxn.shape[0]
         if len(rxn.shape) > 1:
             batch_size = rxn.shape[1]
@@ -434,15 +467,36 @@ class Enzyme:
         if xt is None:
              xt = torch.randn((batch_size, self.sequence_length, self.d_model))           
         
-        for t in range(1, timesteps)[::-1]:
-            t = torch.tensor([t]).repeat(batch_size)
-            with torch.no_grad():
-                noise = self.Model(xt, t, rxn, mask, self.fwd_cfg, s=guidance)
-            xt = self.diffusion.p_sample(xt, t, t, noise)
-
+        t = torch.tensor([t]).repeat(batch_size)
+        with torch.no_grad():
+            noise = self.Model(xt, t, rxn, mask, self.fwd_cfg, s=guidance)
+        xt = self.diffusion.p_sample(xt, t, t, noise)
+        return xt
+    
+    def sample_loop(self, rxn, t, mask=None, xt=None, guidance=1, save_steps=None):
+        if xt is None:
+            xt = torch.randn((rxn.shape[0], self.sequence_length, self.d_model)).to(self.device)
+        steps = []
+        for ts in range(0,t):
+            if save_steps:
+                steps.append(xt)
+            xt = self.sample(rxn, ts, mask, xt, guidance)
+        return xt, steps
+    
+    def x0_to_seq(self, x0):
+        tokens = self.Unbedder(x0)
+        aas = [self.tokeniser.token_to_string(tokens[i]) for i in range(tokens.shape[0])]
+        return aas  
+    
+    def inference(self, rxn, timesteps, mask=None, guidance=1, batch_size=2):
+        xt = torch.randn((batch_size, self.sequence_length, self.d_model))
+        x0, _ = self.sample_loop(rxn, timesteps, mask, xt, guidance)
+        tokens = self.Unbedder(x0)
+        aas = [self.tokeniser.token_to_string(tokens[i]) for i in range(tokens.shape[0])]
+        return aas  
 
 
 
 if __name__ =='__main__':
-    runner = Enzyme(token_size=23, chem_size=2048, timesteps=200, layers=6, ds_file='2048_1M.h5', embed_weights_file='OmegaDiff/weights/embed.pt', model_weight_dir='/content/drive/My Drive/OmegaDiff')
-    runner.train(EPOCHS=50, EPOCH_SIZE=10000, BATCH_SIZE=5, lr=1e-3, s=3, wab=True)
+    runner = Enzyme(token_size=23, chem_size=10420, timesteps=200, layers=10, ds_file='2048_1M.h5', embed_weights_file='OmegaDiff/weights/embed.pt', model_weight_dir='/content/drive/My Drive/OmegaDiff')
+    runner.train(EPOCHS=15, EPOCH_SIZE=5000, BATCH_SIZE=5, lr=1e-1, s=3, wab=True)
