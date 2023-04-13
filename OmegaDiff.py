@@ -104,8 +104,8 @@ class Conditioner(torch.nn.Module):
         )
     
     def null_forward(self, t):
-        rxn = torch.zeros((t.shape[0], self.chem_size))
-        mask = torch.zeros((t.shape[0], self.sequnece_length))
+        rxn = torch.zeros((t.shape[0], self.chem_size)).to(t.device)
+        mask = torch.zeros((t.shape[0], self.sequnece_length)).to(t.device)
         x = self.forward(rxn, t, mask)
         return x
     
@@ -132,7 +132,7 @@ class OmegaDiff(nn.Module):
 
     def forward(self, xt, t, rxn, mask=None, fwd_cfg=None, s=1):
         if mask is None:
-            mask = torch.zeros(xt.shape[:2])
+            mask = torch.zeros(xt.shape[:2]).to(xt.device)
 
         cond = self.condition(rxn, t, mask)
         ei = self.omega_plm(xt, mask, cond, fwd_cfg)
@@ -314,6 +314,9 @@ class Enzyme:
     )   
         self.Embedder = EMBEDDER(self.token_size, self.d_model, embed_weights_file)
         self.Model = OmegaDiff(self.cfg, self.timesteps, self.chem_size, self.chem_size)
+        self.Model.to(self.device)
+        self.Model.condition.to(self.device)
+        self.Model.omega_plm.to(self.device)
 
     def train(self, EPOCHS=15, EPOCH_SIZE=10000, BATCH_SIZE=5, lr=1e-3, s=3, wab=False):
         EPOCH_STEPS = int(EPOCH_SIZE / BATCH_SIZE)
@@ -359,6 +362,7 @@ class Enzyme:
                 xt = xt.to(self.device)
                 ts = ts.to(self.device)
                 noise = noise.to(self.device)
+                rxn = rxn.to(self.device)
 
                 y_hat = self.Model(xt, ts, rxn, fwd_cfg=self.fwd_cfg, s=s)
 
@@ -376,7 +380,7 @@ class Enzyme:
       self.save_weights(self.model_weight_dir+'_'+str(epoch)+'.pt')
       # img = self.visualise_training(x0, xt, y, y_hat)
 
-      if wandb:
+      if wab:
         wandb.log(
           {
             "epoch" : epoch,
@@ -440,5 +444,5 @@ class Enzyme:
 
 
 if __name__ =='__main__':
-    runner = Enzyme(token_size=23, chem_size=2048, timesteps=200, layers=1, ds_file='OmegaDiff/datasets/2048_1M.h5', embed_weights_file='OmegaDiff/weights/embed.pt', model_weight_dir='/content/drive/My Drive/OmegaDiff')
-    runner.train(EPOCHS=1, EPOCH_SIZE=4, BATCH_SIZE=2, lr=1e-3, s=3, wab=True)
+    runner = Enzyme(token_size=23, chem_size=2048, timesteps=200, layers=6, ds_file='2048_1M.h5', embed_weights_file='OmegaDiff/weights/embed.pt', model_weight_dir='/content/drive/My Drive/OmegaDiff')
+    runner.train(EPOCHS=50, EPOCH_SIZE=10000, BATCH_SIZE=5, lr=1e-3, s=3, wab=True)
