@@ -436,6 +436,10 @@ class Enzyme:
                 optimizer.step()
                 if batch % 50 == 0:
                   print(batch / EPOCH_STEPS, loss_sum / batch)
+                  wandb.log({
+                      "loss" : loss_sum / batch,
+                      "epoch" : epoch + batch / EPOCH_STEPS 
+                  })
             
             self.log(epoch, loss_sum/EPOCH_STEPS, x0.detach().cpu(), xt.detach().cpu(), noise.detach().cpu(), y_hat.detach().cpu(), wab)
             schedular.step()                
@@ -443,7 +447,7 @@ class Enzyme:
     def log(self, epoch, loss, x0, xt, y, y_hat, wab=False):
         self.save_weights(self.model_weight_dir+'_'+str(epoch)+'.pt')
         img = self.visualise_training(x0, xt, y, y_hat)
-        seq, pred_seq, anim = self.evaluate([69, 420], guidance=10, show_steps=True)
+        seq, pred_seq, anim = self.evaluate([69, 420], guidance=3, show_steps=False)
 
         if wab:
             wandb.log(
@@ -453,7 +457,7 @@ class Enzyme:
                 "true_seq" : seq,
                 "pred_seq" : pred_seq,
                 "train_fig" : wandb.Image(img),
-                "denoising" : wandb.Video("denoise.gif")
+                # "denoising" : wandb.Video("denoise.gif")
             }
             )
 
@@ -553,8 +557,8 @@ def test_inference():
     t, p, anime = runner.evaluate([69, 420], guidance=3, show_steps=True)
 
 def train():
-    runner = Enzyme(token_size=23, chem_size=10240, timesteps=200, layers=10, ds_file='10240_2_true_true_500k.h5', embed_weights_file='OmegaDiff/weights/embed.pt', unbed_weights_file='OmegaDiff/weights/unbed.pt', model_weight_dir='/content/drive/My Drive/OmegaDiff_10240')
-    # runner.Model.load_state_dict(torch.load('/content/drive/My Drive/OmegaDiff_2.pt'))
+    runner = Enzyme(token_size=23, chem_size=10240, timesteps=200, layers=10, ds_file='10240_2_true_true_500k.h5', embed_weights_file='OmegaDiff/weights/embed.pt', unbed_weights_file='OmegaDiff/weights/unbed.pt', model_weight_dir='OmegaDiff/weights/OmegaDiff_10240')
+    runner.Model.load_state_dict(torch.load('OmegaDiff_2.pt'))
     runner.Model.initalise_plm_weights('release2.pt')
     runner.train(EPOCHS=30, EPOCH_SIZE=5000, BATCH_SIZE=4, lr=1e-3, s=1, wab=False)
 
