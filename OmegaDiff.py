@@ -12,6 +12,8 @@ import seaborn as sns
 from omegafold.omegaplm_diffusion import OmegaPLM
 from omegafold.config import make_config
 
+import visualise
+
 class EMBEDDER(torch.nn.Module):
   def __init__(self, token_size, d_model, file_name=''):
     super().__init__()
@@ -41,15 +43,17 @@ class Unbedder(nn.Module):
             nn.SiLU(),
             nn.Linear(token_size, token_size)
         )
+
+        self.load_state_dict(torch.load(unbed_weight_file))
         
     def forward(self, x):
         x = self.mlp(x)
-        return x.softmax(-1) #give probabilities of each residue
+        return x #give probabilities of each residue
 
     def train(self, ds, EPOCHS, EPOCH_SIZE, BATCH_SIZE, embedder, lr=1e-3):
         EPOCH_STEPS = int(EPOCH_SIZE / BATCH_SIZE)
         EPOCH_SIZE = EPOCH_STEPS * BATCH_SIZE
-        length = len(self.ds)
+        length = len(ds)
         optimizer = torch.optim.AdamW(self.parameters())
         schedular = torch.optim.lr_scheduler.OneCycleLR(optimizer, lr, EPOCHS)
         loss_func = torch.nn.MSELoss()
@@ -62,7 +66,7 @@ class Unbedder(nn.Module):
             for batch in range(1, EPOCH_STEPS):
                 optimizer.zero_grad()
                 bi, _ = torch.sort(batch_idx[(batch-1)*BATCH_SIZE:batch*BATCH_SIZE])
-                Xtokens, rxn = self.ds[bi]
+                Xtokens, rxn = ds[bi]
                 Xtokens = torch.maximum(z, Xtokens)
 
                 x0 = embedder(Xtokens)
@@ -309,7 +313,8 @@ class Tokeniser:
       18 : "Y",
       19 : "V",
       20 : "*",
-      21 : "-"
+      21 : "-",
+      22 : "?",
     }
 
     def token_to_string(self, tokens):
@@ -349,7 +354,7 @@ class Enzyme:
         num_recycle=1,
     )   
         self.Embedder = EMBEDDER(self.token_size, self.d_model, embed_weights_file)
-        self.Unbedder = Unbedder(self.token_size, self.d_model, unbed_weights_file)
+        self.Unbedder = Unbedder(self.token_size, self.d_model, self.sequence_length, unbed_weights_file)
         self.Model = OmegaDiff(self.cfg, self.timesteps, self.chem_size, self.chem_size)
         self.Model.to(self.device)
         self.Model.condition.to(self.device)
@@ -414,18 +419,23 @@ class Enzyme:
             schedular.step()                
 
     def log(self, epoch, loss, x0, xt, y, y_hat, wab=False):
-      self.save_weights(self.model_weight_dir+'_'+str(epoch)+'.pt')
-      img = self.visualise_training(x0, xt, y, y_hat)
+        self.save_weights(self.model_weight_dir+'_'+str(epoch)+'.pt')
+        img = self.visualise_training(x0, xt, y, y_hat)
+        seq, pred_seq, anim = self.evaluate([69, 420], guidance=10, show_steps=True)
 
-      if wab:
-        wandb.log(
-          {
-            "epoch" : epoch,
-            "loss" : loss,
-            "train_fig" : wandb.Image(img)
-          }
-        )
-      print(f"Epoch {epoch} : MSE {loss}")
+        if wab:
+            wandb.log(
+            {
+                "epoch" : epoch,
+                "loss" : loss,
+                "true_seq" : seq,
+                "pred_seq" : pred_seq,
+                "train_fig" : wandb.Image(img),
+                "denoising" : wandb.Video(anim)
+            }
+            )
+            
+        print(f"Epoch {epoch} : MSE {loss}")
 
 
     def visualise_training(self, x0, xt, y, y_hat):
@@ -489,14 +499,26 @@ class Enzyme:
         return aas  
     
     def inference(self, rxn, timesteps, mask=None, guidance=1, batch_size=2):
-        xt = torch.randn((batch_size, self.sequence_length, self.d_model))
+        xt = torch.randn((batch_size, self.sequence_length, self.d_model)).to(self.device)
         x0, _ = self.sample_loop(rxn, timesteps, mask, xt, guidance)
         tokens = self.Unbedder(x0)
         aas = [self.tokeniser.token_to_string(tokens[i]) for i in range(tokens.shape[0])]
         return aas  
 
-
-
+    def evaluate(self, idxs, mask=None, guidance=1, show_steps=False, save_dir='denoise.gif'):
+        seq, rxn = self.ds[idxs]
+        seq = [self.tokeniser.token_to_string(seq[i]) for i in range(seq.shape[0])]
+        pred_seqs, steps = self.inference(rxn, self.timesteps, guidance=guidance, show_steps=show_steps)
+        
+        if len(steps) > 0:
+            animation = visualise.denoising_animation(steps)
+            animation.save(save_dir)
+        else:
+            animation = None
+        
+        print(f"True : {seq} \n Pred : \n" + '\n'.join(['i'+a for i,a in enumerate(pred_seqs)]))
+        return seq, pred_seqs, animation
+    
 if __name__ =='__main__':
-    runner = Enzyme(token_size=23, chem_size=10420, timesteps=200, layers=10, ds_file='2048_1M.h5', embed_weights_file='OmegaDiff/weights/embed.pt', model_weight_dir='/content/drive/My Drive/OmegaDiff')
+    runner = Enzyme(token_size=23, chem_size=10420, timesteps=200, layers=10, ds_file='2048_1M.h5', embed_weights_file='OmegaDiff/weights/embed.pt', unbed_weights_file='OmegaDiff/weights.unbed.pt', model_weight_dir='/content/drive/My Drive/OmegaDiff')
     runner.train(EPOCHS=15, EPOCH_SIZE=5000, BATCH_SIZE=5, lr=1e-1, s=3, wab=True)
