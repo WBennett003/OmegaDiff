@@ -13,13 +13,13 @@ class dataset_h5(torch.utils.data.Dataset):
 
     def __getitem__(self, idx):
         return (
-            torch.Tensor(self.file['AA_seq'][idx]).long().to(self.device), 
-            torch.Tensor(self.file['reaction'][idx]).to(self.device),
+            torch.as_tensor(self.file['AA_seq'][idx], device=self.device, dtype=torch.long), 
+            torch.as_tensor(self.file['reaction'][idx], device=self.device),
         )
     
     def get_row(self, idx):
         return (
-            torch.Tensor(self.file['AA_seq'][idx]).long().to(self.device), 
-            torch.Tensor(self.file['reaction'][idx]).to(self.device),
-            self.file['smile_reaction']
+            torch.as_tensor(self.file['AA_seq'][idx], device=self.device, dtype=torch.long), 
+            torch.as_tensor(self.file['reaction'][idx], self=self.device),
+            self.file['accension']
         )

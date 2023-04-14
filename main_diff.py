@@ -102,11 +102,12 @@ class Enzyme:
                 optimizer.step()
                 schedular.step()                    
                 if batch % 50 == 0:
-                  print(f"{int(100*batch / EPOCH_STEPS)} | {time.ctime(time.time())} |  MSE {round(loss_sum / batch, 4)}")
-                  if wab:
-                      wandb.log({
-                      "loss" : loss_sum / batch,
-                      "epoch" : epoch + batch / EPOCH_STEPS 
+                    print(f"{int(100*batch / EPOCH_STEPS)} | {time.ctime(time.time())} |  MSE {round(loss_sum / batch, 4)}")
+                    if wab:
+                        wandb.log({
+                        "loss" : loss_sum / batch,
+                        "epoch" : epoch + batch / EPOCH_STEPS, 
+                        "lr" : schedular.get_last_lr()
                   })
             
             self.log(epoch, loss_sum/EPOCH_STEPS, x0.detach().cpu(), xt.detach().cpu(), noise.detach().cpu(), y_hat.detach().cpu(), wab)
