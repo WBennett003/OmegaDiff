@@ -9,11 +9,13 @@ from omegafold.geoformer_cond import GeoFormer
 device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
 class Embedder(torch.nn.Module):
-  def __init__(self, token_size, d_model, file_name=''):
+  def __init__(self, token_size, d_model, file_name='', freeze=True, device=None):
     super().__init__()
     self.layer = torch.nn.Embedding(token_size, d_model)
-    self.load_state_dict(torch.load(file_name))
-    self.freeze_weights()
+    self.load_state_dict(torch.load(file_name, map_location=device))
+    
+    if freeze:
+        self.freeze_weights()
 
   def forward(self, x):
     return self.layer(x)
@@ -24,7 +26,7 @@ class Embedder(torch.nn.Module):
 
 
 class Unbedder(nn.Module):
-    def __init__(self, token_size=23, d_model=1280, sequence_length=1280, unbed_weight_file=''):
+    def __init__(self, token_size=23, d_model=1280, sequence_length=1280, unbed_weight_file='', device=None):
         super().__init__()
         self.token_size = token_size
         self.d_model = d_model
@@ -38,7 +40,7 @@ class Unbedder(nn.Module):
             nn.Linear(token_size, token_size)
         )
 
-        self.load_state_dict(torch.load(unbed_weight_file))
+        self.load_state_dict(torch.load(unbed_weight_file, map_location=device))
         
     def forward(self, x):
         x = self.mlp(x)
@@ -138,8 +140,8 @@ class Conditioner(torch.nn.Module):
         )
     
     def null_forward(self, t):
-        rxn = torch.zeros((t.shape[0], self.chem_size)).to(t.device)
-        mask = torch.zeros((t.shape[0], self.sequnece_length)).to(t.device)
+        rxn = torch.zeros((t.shape[0], self.chem_size), device=t.device)
+        mask = torch.zeros((t.shape[0], self.sequnece_length), device=t.device)
         x = self.forward(rxn, t, mask)
         return x
     
@@ -165,12 +167,12 @@ class OmegaCond(nn.Module):
         
         #Modified OmegaFold modules
         self.omega_plm = OmegaPLM(cfg)
-        self.geoformer = GeoFormer(cfg_geo)
+        # self.geoformer = GeoFormer(cfg_geo)
 
     def initalise_plm_weights(self, w_dir='weights/model2.pt'):
         w = torch.load(w_dir) #Orignal OmegaFold parameters
         plm = self.omega_plm.state_dict() #Modified OmegaFold module parameters 
-        geo = self.geoformer.state_dict()
+        # geo = self.geoformer.state_dict()
 
         new_state_dict = {}
 
@@ -183,16 +185,16 @@ class OmegaCond(nn.Module):
 
         self.omega_plm.load_state_dict(new_state_dict)
         
-        new_state_dict = {}
+        # new_state_dict = {}
         
-        for k in geo.keys():
-            new_state_dict[k] = geo[k]
+        # for k in geo.keys():
+        #     new_state_dict[k] = geo[k]
 
-        for k in geo.keys():
-            if k[:10] == 'geoformer.':
-                new_state_dict[k[10:]] = w[k]
+        # for k in geo.keys():
+        #     if k[:10] == 'geoformer.':
+        #         new_state_dict[k[10:]] = w[k]
 
-        self.geoformer.load_state_dict(new_state_dict)
+        # self.geoformer.load_state_dict(new_state_dict)
         
 
     def forward(self, xt, t, rxn, mask=None, fwd_cfg=None, s=1):
@@ -201,7 +203,7 @@ class OmegaCond(nn.Module):
 
         cond = self.condition(rxn, t, mask)
         xi, ei = self.omega_plm(xt, mask, cond, fwd_cfg)
-        _, ei, xi = self.geoformer(xi, ei, mask, fwd_cfg)
+        # _, ei, xi = self.geoformer(xi, ei, mask, fwd_cfg)
         xj = self.null_forward(xt, t, mask, fwd_cfg)
         x = xj + s * (xi - xj)
         return x
@@ -212,7 +214,7 @@ class OmegaCond(nn.Module):
 
         cond = self.condition.null_forward(t)
         xj, ej = self.omega_plm(xt, mask, cond, fwd_cfg)
-        _, _, xj = self.geoformer(xj, ej, mask, fwd_cfg)
+        # _, ej, xj = self.geoformer(xj, ej, mask, fwd_cfg)
         return xj
 
 
@@ -258,20 +260,20 @@ class OmegaCtrl(nn.Module):
         d_model = cfg.node
         sequence = cfg.node
 
-        self.embedder = Embedder(token_size, d_model=self.d_model)
+        self.embedder = Embedder(token_size, d_model=d_model, file_name='OmegaDiff/weights/embed.pt', freeze=True)
 
         self.condition = Conditioner_Ctrl(chem_size, hidden_size, d_model, sequence)
         
         #Modified OmegaFold modules
         self.omega_plm = OmegaPLM(cfg)
-        self.geoformer = GeoFormer(cfg_geo)
+        # self.geoformer = GeoFormer(cfg_geo)
 
         self.out = nn.Linear(d_model, token_size)
 
     def initalise_plm_weights(self, w_dir='weights/model2.pt'):
         w = torch.load(w_dir) #Orignal OmegaFold parameters
         plm = self.omega_plm.state_dict() #Modified OmegaFold module parameters 
-        geo = self.geoformer.state_dict()
+        # geo = self.geoformer.state_dict()
 
         new_state_dict = {}
 
@@ -284,27 +286,28 @@ class OmegaCtrl(nn.Module):
 
         self.omega_plm.load_state_dict(new_state_dict)
         
-        new_state_dict = {}
+#         new_state_dict = {}
         
-        for k in geo.keys():
-            new_state_dict[k] = geo[k]
+#         for k in geo.keys():
+#             new_state_dict[k] = geo[k]
 
-        for k in geo.keys():
-            if k[:10] == 'geoformer.':
-                new_state_dict[k[10:]] = w[k]
+#         for k in geo.keys():
+#             if k[:10] == 'geoformer.':
+#                 new_state_dict[k[10:]] = w[k]
 
-        self.geoformer.load_state_dict(new_state_dict)
+#         self.geoformer.load_state_dict(new_state_dict)
 
-        self.embedder.load_state_dict('OmegaDiff/weights/embed.pt')
+        # self.embedder.load_state_dict('OmegaDiff/weights/embed.pt')
         
 
     def forward(self, xt, rxn, mask=None, fwd_cfg=None, s=1):
         if mask is None:
             mask = torch.zeros(xt.shape[:2], device=xt.device)
-
+        
         cond = self.condition(rxn, mask)
+        xt = self.embedder(xt)
         xi, ei = self.omega_plm(xt, mask, cond, fwd_cfg)
-        _, ei, xi = self.geoformer(xi, ei, mask, fwd_cfg)
+        # _, ei, xi = self.geoformer(xi, ei, mask, fwd_cfg)
         xi = self.out(xi)
         ej, xj = self.null_forward(xt, mask, fwd_cfg)
         x = xj + s * (xi - xj)
@@ -317,9 +320,9 @@ class OmegaCtrl(nn.Module):
         if mask is None:
             mask = torch.zeros(xt.shape[:2], device=xt.device)
 
-        cond = self.condition.null_forward()
+        cond = self.condition.null_forward(xt.shape[0], xt.device)
         xj, ej = self.omega_plm(xt, mask, cond, fwd_cfg)
-        _, ej, xj = self.geoformer(xj, ej, mask, fwd_cfg)
+        # _, ej, xj = self.geoformer(xj, ej, mask, fwd_cfg)
         xj = self.out(xj)
         return ej, xj
     

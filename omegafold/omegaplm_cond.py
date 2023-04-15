@@ -166,7 +166,6 @@ class OmegaPLMLayer(modules.OFModule):
         node = scale_shift(node, gamma, beta)
         
         node, edge = self.gau(node, qk_scaling, bias, fwd_cfg)
-
         node = node * (1 + alpha.unsqueeze(1))
         node = node + shortcut
         return node, edge
@@ -229,7 +228,7 @@ class OmegaPLM(modules.OFModule):
             dtype=node.dtype, device=node.device
         )
         for i, layer in enumerate(self.layers):
-            node, _ = layer(node, qk_scaling, bias, cond, fwd_cfg)
+            node, edges[i] = layer(node, qk_scaling, bias, cond, fwd_cfg)
         node = self.output_norm(node)
 
         # Taking the average

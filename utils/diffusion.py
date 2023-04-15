@@ -54,3 +54,32 @@ class Diffusion:
             posterior_variance_t = extract(self.posterior_varience, t, pred_noise.shape)
             noise = torch.randn_like(pred_noise)
             return model_mean + torch.sqrt(posterior_variance_t) * noise
+
+    def masked_q_samples(self, x_0, mask, t, noise=None):
+        x_t = self.q_samples(x_0, t, noise)
+        x_t = x_0 + x_t * (1 - mask[:, :, None])
+        return x_t
+
+def test_masked_noise():
+    a = torch.arange(0, 1280).repeat(1280).repeat(2).reshape((2, 1280, 1280))
+    mask = torch.ones((2, 1280))
+    z = torch.zeros((2, 640))
+    mask[:, :639] = z[:, :639]
+
+    print(a.shape, mask.shape)
+
+    d = Diffusion(200)
+    noise = torch.randn(a.shape)
+    x_t = d.masked_q_samples(a, mask, torch.as_tensor([100, 100]), noise)
+
+    import seaborn as sns
+    import matplotlib.pyplot as plt
+    
+    sns.heatmap(a[0])
+    plt.show()
+
+    sns.heatmap(x_t[0])
+    plt.show()
+
+if __name__ == '__main__':
+    test_masked_noise()
