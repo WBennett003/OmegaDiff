@@ -57,7 +57,8 @@ class Diffusion:
 
     def masked_q_samples(self, x_0, mask, t, noise=None):
         x_t = self.q_samples(x_0, t, noise)
-        x_t = x_0 + x_t * (1 - mask[:, :, None])
+        x_t = x_0*mask[:, :, None] + x_t * (1 - mask[:, :, None])
+        noise = noise*(1-mask[:,:,None])
         return x_t
 
 def test_masked_noise():

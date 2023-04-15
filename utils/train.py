@@ -55,7 +55,7 @@ class Mask_sampler:
         mask = self.blank_mask
 
         for i in range(self.batch_size):
-            idxs = torch.randperm(self.length)
+            idxs = torch.randperm(self.length, device=x.device)
             tars = idxs[:self.tar_length]
 
             mask_idx, _ = torch.sort(tars[:self.mask_length])

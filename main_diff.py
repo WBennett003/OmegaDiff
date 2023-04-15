@@ -62,7 +62,7 @@ class Enzyme:
         schedular = torch.optim.lr_scheduler.OneCycleLR(optimizer, lr, epochs=EPOCHS, steps_per_epoch=EPOCH_STEPS)
         loss_func = torch.nn.MSELoss()
 
-        self.sampler = Mask_sampler(self.sequence_length, BATCH_SIZE, targets=target_mask, mask_rate=mask_rate)
+        self.sampler = Mask_sampler(self.sequence_length, BATCH_SIZE, targets=target_mask, mask_rate=mask_rate, device=self.device)
 
         if wab:
             wandb.init(
@@ -79,12 +79,15 @@ class Enzyme:
             "layers": self.cfg.edge,
             "chem_size": self.chem_size,
             "guided multiplier": s,
+            "mask_rate" : mask_rate,
+            "target_rate" : target_mask
             })
 
         z = torch.zeros((BATCH_SIZE, self.sequence_length), dtype=torch.long, device=self.device)
 
         for epoch in range(0, EPOCHS):
             loss_sum = 0
+            prev_batch = 0
             batch_idx = torch.randperm(length)[:EPOCH_SIZE]
             for batch in range(1, EPOCH_STEPS):
                 optimizer.zero_grad()
@@ -109,9 +112,9 @@ class Enzyme:
                 loss_sum += loss.detach()
 
                 if batch % verbose_step == 0:
-                    l = round(loss_sum / verbose_step, 4)
+                    l = round(((loss_sum-prev_batch) / verbose_step).item(), 4)
                     print(f"{int(100*batch / EPOCH_STEPS)}% | {time.ctime(time.time())} |  MSE {l}")
-                    loss_sum = 0
+                    prev_batch = loss_sum
                     if wab:
                         wandb.log({
                         "loss" : l,
@@ -223,7 +226,7 @@ class Enzyme:
         else:
             animation = None
         
-        # print(f"True : {'\n'.join(['i'+a for i,a in enumerate(seq)])} \n Pred : {'\n'.join(['i'+a for i,a in enumerate(pred_seqs)])"})
+        print(f"True : "+'\n'.join([str(i)+a.replace('-', '') for i,a in enumerate(seq)])+" \n Pred : "+'\n'.join([str(i)+a.replace('-', '') for i,a in enumerate(pred_seqs)]))
         return seq, pred_seqs, accension, animation
     
 def test_inference():
