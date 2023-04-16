@@ -9,7 +9,7 @@ from omegafold.geoformer_cond import GeoFormer
 device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
 class Embedder(torch.nn.Module):
-  def __init__(self, token_size, d_model, file_name='', freeze=True, device=None):
+  def __init__(self, token_size, d_model, file_name='weights/embed.pt', freeze=True, device=None):
     super().__init__()
     self.layer = torch.nn.Embedding(token_size, d_model)
     self.load_state_dict(torch.load(file_name, map_location=device))
@@ -156,6 +156,9 @@ class Conditioner(torch.nn.Module):
 
         return cond
 
+        # return node_plm, edge_plm
+        return node_repr, edge_repr
+
 class OmegaCond(nn.Module):
     def __init__(self, cfg, t_steps=200, chem_size=2048, hidden_size=2048, cfg_geo=None):
         super().__init__()
@@ -199,18 +202,21 @@ class OmegaCond(nn.Module):
 
     def forward(self, xt, t, rxn, mask=None, fwd_cfg=None, s=1):
         if mask is None:
-            mask = torch.zeros(xt.shape[:2]).to(xt.device)
+            mask = torch.zeros(xt.shape[:2], device=xt.device)
 
         cond = self.condition(rxn, t, mask)
+
         xi, ei = self.omega_plm(xt, mask, cond, fwd_cfg)
+
         # _, ei, xi = self.geoformer(xi, ei, mask, fwd_cfg)
         xj = self.null_forward(xt, t, mask, fwd_cfg)
+
         x = xj + s * (xi - xj)
         return x
     
     def null_forward(self, xt, t, mask=None, fwd_cfg=None):
         if mask is None:
-            mask = torch.zeros(xt.shape[:2])
+            mask = torch.zeros(xt.shape[:2], device=xt.device)
 
         cond = self.condition.null_forward(t)
         xj, ej = self.omega_plm(xt, mask, cond, fwd_cfg)
@@ -254,13 +260,13 @@ class Conditioner_Ctrl(torch.nn.Module):
         return cond
 
 class OmegaCtrl(nn.Module):
-    def __init__(self, cfg, token_size=23, chem_size=2048, hidden_size=2048, cfg_geo=None):
+    def __init__(self, cfg, token_size=23, chem_size=2048, hidden_size=2048, cfg_geo=None, checkpoint_backprop=False, embed_file='weights/embed.pt'):
         super().__init__()
         
         d_model = cfg.node
         sequence = cfg.node
 
-        self.embedder = Embedder(token_size, d_model=d_model, file_name='OmegaDiff/weights/embed.pt', freeze=True)
+        self.embedder = Embedder(token_size, d_model=d_model, file_name=embed_file, freeze=True)
 
         self.condition = Conditioner_Ctrl(chem_size, hidden_size, d_model, sequence)
         
@@ -309,12 +315,10 @@ class OmegaCtrl(nn.Module):
         xi, ei = self.omega_plm(xt, mask, cond, fwd_cfg)
         # _, ei, xi = self.geoformer(xi, ei, mask, fwd_cfg)
         xi = self.out(xi)
-        ej, xj = self.null_forward(xt, mask, fwd_cfg)
+        xj = self.null_forward(xt, mask, fwd_cfg)
         x = xj + s * (xi - xj)
-        e = ej + s * (ei - ej)
-
         x = x.softmax(-1)
-        return x, e
+        return x
     
     def null_forward(self, xt, mask=None, fwd_cfg=None):
         if mask is None:
@@ -324,5 +328,5 @@ class OmegaCtrl(nn.Module):
         xj, ej = self.omega_plm(xt, mask, cond, fwd_cfg)
         # _, ej, xj = self.geoformer(xj, ej, mask, fwd_cfg)
         xj = self.out(xj)
-        return ej, xj
+        return xj
     

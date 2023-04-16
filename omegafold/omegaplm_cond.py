@@ -170,6 +170,7 @@ class OmegaPLMLayer(modules.OFModule):
         node = node + shortcut
         return node, edge
 
+@torch.jit.script
 def scale_shift(x, scale, shift):
     return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
 
@@ -187,7 +188,7 @@ class OmegaPLM(modules.OFModule):
     """
 
     def __init__(self, cfg: argparse.Namespace) -> None:
-        super(OmegaPLM, self).__init__(cfg)
+        super(OmegaPLM, self).__init__(cfg) 
         # self.input_embedding = nn.Embedding(
         #     cfg.alphabet_size, cfg.node, padding_idx=cfg.padding_idx
         # )
@@ -196,7 +197,7 @@ class OmegaPLM(modules.OFModule):
         )        
 
         self.output_norm = nn.LayerNorm(cfg.node)
-
+    
     def forward(
             self,
             node: torch.Tensor,

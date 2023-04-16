@@ -13,6 +13,7 @@ from omegafold.config import make_config
 from utils.tokeniser import Tokeniser
 from utils.dataset import dataset_h5
 from utils.models import OmegaCtrl
+from utils.train import Mask_sampler
 
 import visualise
 
@@ -50,13 +51,26 @@ class Enzyme:
         self.Model = OmegaCtrl(self.cfg, self.token_size, self.chem_size, self.chem_size, self.cfg_geo)
         self.Model.to(self.device)
 
-    def train(self, EPOCHS=15, EPOCH_SIZE=10000, BATCH_SIZE=5, lr=1e-3, s=3, wab=False, p=0.5):
+        self.aa_weights = torch.as_tensor([0.31657471, 0.96925363, 0.98297024, 0.98832418, 0.98052505,
+       0.99623613, 0.98924219, 0.97989413, 0.97366834, 0.99191177,
+       0.98279196, 0.97022777, 0.98471806, 0.99245229, 0.98858837,
+       0.98471233, 0.98197448, 0.98253395, 0.99545816, 0.9910603 ,
+       0.97688197, 0.1, 0.1])
+
+    def train(self, EPOCHS=15, EPOCH_SIZE=10000, BATCH_SIZE=5, lr=1e-3, s=3, wab=False, p=0.5, target_mask=0.15, mask_rate=0.5, verbose_step=50, checkpoint_backprop=True, scaleing=True):
         EPOCH_STEPS = int(EPOCH_SIZE / BATCH_SIZE)
         EPOCH_SIZE = EPOCH_STEPS * BATCH_SIZE
         length = len(self.ds)
         optimizer = torch.optim.AdamW(self.Model.parameters())
         schedular = torch.optim.lr_scheduler.OneCycleLR(optimizer, lr, epochs=EPOCHS, steps_per_epoch=EPOCH_STEPS)
-        loss_func = torch.nn.CrossEntropyLoss()
+        loss_func = torch.nn.CrossEntropyLoss(self.aa_weights)
+        self.sampler = Mask_sampler(self.sequence_length, BATCH_SIZE, targets=target_mask, mask_rate=mask_rate, device=self.device)
+
+
+        if self.device.type == "cuda" and scaleing: #reduced precision to improve performance https://efficientdl.com/faster-deep-learning-in-pytorch-a-guide/#4-use-automatic-mixed-precision-amp-
+            scaler = torch.cuda.amp.GradScaler()
+            torch.backends.cudnn.benchmark = True #improve performance
+
 
         if wab:
             wandb.init(
@@ -83,43 +97,59 @@ class Enzyme:
         x = torch.tensor([21], device=self.device, dtype=torch.long).repeat(self.sequence_length).repeat(BATCH_SIZE).reshape((BATCH_SIZE, self.sequence_length))
         for epoch in range(0, EPOCHS):
             loss_sum = 0
+            prev_batch = 0
             batch_idx = torch.randperm(self.train_length)[:EPOCH_SIZE]
             for batch in range(1, EPOCH_STEPS):
-                optimizer.zero_grad()
+                optimizer.zero_grad(set_to_none=True) #some witchcraft improvement https://pytorch.org/docs/stable/optim.html
                 # get random samples 
                 bi, _ = torch.sort(batch_idx[(batch-1)*BATCH_SIZE:batch*BATCH_SIZE])
                 Xtokens, rxn = self.ds[bi]
                 Xtokens = torch.maximum(z, Xtokens)
                 
                 #get random 
+                x, mask = self.sampler.sample(Xtokens)
 
-                
-                y_hat, pairs = self.Model(x, rxn, fwd_cfg=self.fwd_cfg, s=s)
+                if self.device.type == 'cuda' and scaleing: # Apparently fixed if statement doesn't effect perforance largely?
+                    with torch.cuda.amp.autocast(): # speeds up by using f16 instead of f32 https://pytorch.org/blog/accelerating-training-on-nvidia-gpus-with-pytorch-automatic-mixed-precision/ 
+                        y_hat = self.Model(x, rxn, mask=mask, fwd_cfg=self.fwd_cfg, s=s)
+                else:
+                    y_hat = self.Model(x, rxn, mask=mask, fwd_cfg=self.fwd_cfg, s=s)
+
                 loss = loss_func(
                     y_hat.permute(0, 2, 1),
                     Xtokens)
 
-                loss.backward()
+                if self.device.type == 'cuda' and scaleing:
+                    scaler.scale(loss).backward() #scaler effecting the gradients
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
+                    loss.backward()
+                    optimizer.step()
+
                 loss_sum += loss.detach()
-                optimizer.step()
                 schedular.step()    
                 
                 
-                if batch % 25 == 0:
-                    l = round((loss_sum / batch).item(), 4)
-                    print(f"{int(100*batch / EPOCH_STEPS)}% | {time.ctime(time.time())} |  loss {l}")
+                if batch % verbose_step == 0:
+                    l = ((loss_sum-prev_batch) / verbose_step).item()
+                    print(f"{int(100*batch / EPOCH_STEPS)}% | {time.ctime(time.time())} |  MSE {l}")
+                    prev_batch = loss_sum.item()
                     if wab:
                         wandb.log({
                         "loss" : l,
+                        "epoch" : epoch + batch / EPOCH_STEPS, 
                         "lr" : schedular.get_last_lr()[0]
                   })
             
-            
-            self.log(epoch, (loss_sum/EPOCH_STEPS).item(), BATCH_SIZE, wab)
+            # self.log(epoch, (loss_sum/EPOCH_STEPS).item(), BATCH_SIZE, wab)
 
     def log(self, epoch, train_loss, batch_size, wab=False):
         self.save_weights(self.model_weight_dir+'_'+str(epoch)+'.pt')
-        val_loss, val_acc, seq_txt, pred_seq_txt, accension, pairs = self.evaluate(batch_size)
+        val_loss, val_acc, seq_txt, pred_seq_txt, accension = self.evaluate(batch_size)
+
+
+        print(f"Epoch {epoch} : {time.ctime(time.time())} : train_loss {train_loss} : val_loss {val_loss} : val_acc {val_acc}")
 
         if wab:
             wandb.log(
@@ -131,11 +161,9 @@ class Enzyme:
                 "seq_text" : seq_txt,
                 "pred_seq_text" : pred_seq_txt, 
                 "accension" : accension,
-                # "pair_weights" : wandb.Image(pairs)
             }
             )
 
-        print(f"Epoch {epoch} : {time.ctime(time.time())} : train_loss {train_loss} : val_loss {val_loss} : val_acc {val_acc}")
 
     def save_weights(self, file_dir):
       torch.save(self.Model.state_dict(), file_dir)
@@ -143,7 +171,7 @@ class Enzyme:
     def load_weights(self, file_dir):
       self.Model.load_state_dict(torch.load(file_dir))
 
-    def evaluate(self, batch_size, eval_size=500, mask=None, guidance=1, show_steps=False, save_dir='denoise.gif'):
+    def evaluate(self, batch_size, eval_size=2, mask=None, guidance=1, show_steps=False, save_dir='denoise.gif'):
         if eval_size > self.val_length:
             eval_size = self.val_length
 
@@ -156,7 +184,7 @@ class Enzyme:
 
         val_shuffle = torch.randperm(self.val_length)[:eval_size]
         acc_func = Accuracy(task='multiclass', top_k=1, num_classes=self.token_size).to(self.device)
-        loss_func = torch.nn.CrossEntropyLoss()
+        loss_func = torch.nn.CrossEntropyLoss(self.aa_weights)
         x = torch.tensor([21], device=self.device, dtype=torch.long).repeat(self.sequence_length).repeat(batch_size).reshape((batch_size, self.sequence_length))
         z = torch.zeros((batch_size,self.sequence_length), dtype=torch.long, device=self.device)
         
@@ -167,22 +195,19 @@ class Enzyme:
                 seq, rxn, accension = self.ds.get_row(idx)
                 seq = torch.maximum(z, seq)
                 
-                pred_seq, pairs_matrix = self.Model(x, rxn, fwd_cfg=self.fwd_cfg, s=guidance)
+                pred_seq = self.Model(x, rxn, fwd_cfg=self.fwd_cfg, s=guidance)
                 
                 loss = loss_func(pred_seq.permute(0,2,1), seq)
                 acc = acc_func(pred_seq.permute(0,2,1), seq)
                 acc_sum += acc
                 loss_sum += loss
 
-        print(pairs_matrix.shape)
-                
         acc = acc_sum / batch_steps
         loss = loss_sum / batch_steps
         
         seq_txt = [self.tokeniser.token_to_string(i) for i in seq]
         pred_seq_txt = [self.tokeniser.token_to_string(i) for i in pred_seq.argmax(-1)]
-        # pair_fig = self.visualise_pairs_matrix(pairs_matrix)
-        return loss, acc, seq_txt, pred_seq_txt, accension, None
+        return loss, acc, seq_txt, pred_seq_txt, accension
     
     def visualise_pairs_matrix(self, pair_matrix, figsize=(20,8)):
         bs = pair_matrix.shape[0]
@@ -199,10 +224,12 @@ def test_inference():
     t, p, anime = runner.evaluate([69, 420], guidance=3, show_steps=True)
 
 def train():
-    runner = Enzyme(token_size=23, chem_size=10240, layers=6, ds_file='10240_2_true_true_500k.h5', embed_weights_file='OmegaDiff/weights/embed.pt', unbed_weights_file='OmegaDiff/weights/unbed.pt', model_weight_dir='OmegaDiff/weights/OmegaDiff_10240')
+    runner = Enzyme(token_size=23, chem_size=10240, layers=1, ds_file='10240_2_true_true_500k.h5', embed_weights_file='weights/embed.pt', unbed_weights_file='weights/unbed.pt', model_weight_dir='weights/OmegaDiff_10240')
     # runner.Model.load_state_dict(torch.load('OmegaDiff_2.pt'))
-    runner.Model.initalise_plm_weights('release2.pt')
-    runner.train(EPOCHS=30, EPOCH_SIZE=10000, BATCH_SIZE=10, lr=0.1, s=1, wab=False)
+    # runner.Model.initalise_plm_weights('release2.pt')
+    start = time.time()
+    runner.train(EPOCHS=1, EPOCH_SIZE=4, BATCH_SIZE=2, lr=1e-4, s=1, wab=False, verbose_step=1, scaleing=False)
+    print(f" Done in {time.time()-start}s")
 
 if __name__ =='__main__':
     train()

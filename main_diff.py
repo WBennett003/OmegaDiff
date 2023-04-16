@@ -54,12 +54,17 @@ class Enzyme:
         self.Model.condition.to(self.device)
         self.Model.omega_plm.to(self.device)
 
-    def train(self, EPOCHS=15, EPOCH_SIZE=10000, BATCH_SIZE=5, lr=1e-3, s=3, wab=False, target_mask=0.15, mask_rate=0.5, verbose_step=50):
+    def train(self, EPOCHS=15, EPOCH_SIZE=10000, BATCH_SIZE=5, lr=1e-4, s=3, wab=False, target_mask=0.15, mask_rate=0.5, verbose_step=50, checkpoint_backprop=True, scaleing=True):
         EPOCH_STEPS = int(EPOCH_SIZE / BATCH_SIZE)
         EPOCH_SIZE = EPOCH_STEPS * BATCH_SIZE
         length = len(self.ds)
         optimizer = torch.optim.AdamW(self.Model.parameters())
         schedular = torch.optim.lr_scheduler.OneCycleLR(optimizer, lr, epochs=EPOCHS, steps_per_epoch=EPOCH_STEPS)
+
+        if self.device.type == "cuda" and scaleing: #reduced precision to improve performance https://efficientdl.com/faster-deep-learning-in-pytorch-a-guide/#4-use-automatic-mixed-precision-amp-
+            scaler = torch.cuda.amp.GradScaler()
+            torch.backends.cudnn.benchmark = True #improve performance
+
         loss_func = torch.nn.MSELoss()
 
         self.sampler = Mask_sampler(self.sequence_length, BATCH_SIZE, targets=target_mask, mask_rate=mask_rate, device=self.device)
@@ -80,7 +85,9 @@ class Enzyme:
             "chem_size": self.chem_size,
             "guided multiplier": s,
             "mask_rate" : mask_rate,
-            "target_rate" : target_mask
+            "target_rate" : target_mask,
+            "Checkpointing" : checkpoint_backprop,
+            "scaling_gradients" : scaleing
             })
 
         z = torch.zeros((BATCH_SIZE, self.sequence_length), dtype=torch.long, device=self.device)
@@ -90,7 +97,7 @@ class Enzyme:
             prev_batch = 0
             batch_idx = torch.randperm(length)[:EPOCH_SIZE]
             for batch in range(1, EPOCH_STEPS):
-                optimizer.zero_grad()
+                optimizer.zero_grad(set_to_none=True) #idk apparently imrpoves but has side effects https://pytorch.org/docs/stable/optim.html
                 bi, _ = torch.sort(batch_idx[(batch-1)*BATCH_SIZE:batch*BATCH_SIZE])
                 Xtokens, rxn = self.ds[bi]
                 Xtokens = torch.maximum(z, Xtokens)
@@ -102,19 +109,31 @@ class Enzyme:
                 noise = torch.randn(x0.shape, device=self.device)
                 xt = self.diffusion.masked_q_samples(x0, mask, ts, noise)
 
-                y_hat = self.Model(xt, ts, rxn, mask=mask, fwd_cfg=self.fwd_cfg, s=s)
+                if self.device.type == 'cuda' and scaleing: # Apparently fixed if statement doesn't effect perforance largely?
+                    with torch.cuda.amp.autocast(): # speeds up by using f16 instead of f32 https://pytorch.org/blog/accelerating-training-on-nvidia-gpus-with-pytorch-automatic-mixed-precision/
+                        y_hat = self.Model(xt, ts, rxn, mask=mask, fwd_cfg=self.fwd_cfg, s=s) # incase of non-checkpoint runs
+                else:            
+                    y_hat = self.Model(xt, ts, rxn, mask=mask, fwd_cfg=self.fwd_cfg, s=s) # incase of non-checkpoint runs
+
 
                 loss = loss_func(y_hat, noise)
-                loss.backward()
-                optimizer.step()
+                
+                if self.device.type == 'cuda' and scaleing:
+                    scaler.scale(loss).backward()
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
+                    loss.backward()
+                    optimizer.step()
+
                 schedular.step()                    
 
                 loss_sum += loss.detach()
 
                 if batch % verbose_step == 0:
-                    l = round(((loss_sum-prev_batch) / verbose_step).item(), 4)
+                    l = ((loss_sum-prev_batch) / verbose_step).item()
                     print(f"{int(100*batch / EPOCH_STEPS)}% | {time.ctime(time.time())} |  MSE {l}")
-                    prev_batch = loss_sum
+                    prev_batch = loss_sum.item()
                     if wab:
                         wandb.log({
                         "loss" : l,
@@ -128,10 +147,12 @@ class Enzyme:
     def log(self, epoch, loss, x0, xt, y, y_hat, wab=False):
         print(f"Epoch {epoch} : MSE {loss}")
         self.save_weights(self.model_weight_dir+'_'+str(epoch)+'.pt')
-        img = self.visualise_training(x0, xt, y, y_hat)
-        seq, pred_seq, accension, anim = self.evaluate([69, 420], guidance=3, show_steps=False)
+        
 
         if wab:
+            img = self.visualise_training(x0, xt, y, y_hat)
+            seq, pred_seq, accension, anim = self.evaluate([69, 420], guidance=3, show_steps=False)
+        
             wandb.log(
             {
                 "epoch" : epoch,
@@ -210,15 +231,13 @@ class Enzyme:
           self.Unbedder
           tokens = self.Unbedder(x0).argmax(-1)
         
-        
-        aas = [self.tokeniser.token_to_string(tokens[i]) for i in range(tokens.shape[0])]
-        return aas, steps  
+        return tokens, steps, x0
 
     def evaluate(self, idxs, mask=None, guidance=1, show_steps=False, save_dir='figure/denoise.gif'):
         seq, rxn, accension = self.ds.get_row(idxs)
         seq = [self.tokeniser.token_to_string(seq[i]) for i in range(seq.shape[0])]
-        # print(seq)
-        pred_seqs, steps = self.inference(rxn, self.timesteps, guidance=guidance, show_steps=show_steps)
+        pred_seqs, steps, pred_x0 = self.inference(rxn, self.timesteps, guidance=guidance, show_steps=show_steps)
+        pred_aas = [self.tokeniser.token_to_string(pred_seqs[i]) for i in range(pred_seqs.shape[0])]
         
         if len(steps) > 0:
             animation = visualise.denoising_animation(steps)
@@ -226,7 +245,7 @@ class Enzyme:
         else:
             animation = None
         
-        print(f"True : "+'\n'.join([str(i)+a.replace('-', '') for i,a in enumerate(seq)])+" \n Pred : "+'\n'.join([str(i)+a.replace('-', '') for i,a in enumerate(pred_seqs)]))
+        print(f"True : "+'\n'.join([str(i)+a.replace('-', '') for i,a in enumerate(seq)])+" \n Pred : "+'\n'.join([str(i)+a.replace('-', '') for i,a in enumerate(pred_aas)]))
         return seq, pred_seqs, accension, animation
     
 def test_inference():
@@ -238,9 +257,11 @@ def train():
     runner = Enzyme(token_size=23, chem_size=10240, timesteps=200, layers=1, ds_file='10240_2_true_true_500k.h5', embed_weights_file='weights/embed.pt', unbed_weights_file='weights/unbed.pt', model_weight_dir='weights/OmegaDiff_10240')
     # runner.Model.load_state_dict(torch.load('OmegaDiff_2.pt'))
     # runner.Model.initalise_plm_weights('release2.pt')
-    runner.train(EPOCHS=2, EPOCH_SIZE=4, BATCH_SIZE=2, lr=0.1, s=1, wab=False, verbose_step=50, 
-                 target_mask=0.15, 
-                mask_rate=1.0)
+    start = time.time()
+    runner.train(EPOCHS=1, EPOCH_SIZE=4, BATCH_SIZE=2, lr=1e-4, s=1, wab=False, verbose_step=40, 
+                 target_mask=0.15, mask_rate=1.0, checkpoint_backprop=False, scaleing=False)
+    print(f"Done took {round(time.time() - start, 1)}s")
+    pass
 
 if __name__ =='__main__':
     train()
