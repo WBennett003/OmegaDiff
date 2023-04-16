@@ -51,11 +51,15 @@ class Enzyme:
         self.Model = OmegaCtrl(self.cfg, self.token_size, self.chem_size, self.chem_size, self.cfg_geo)
         self.Model.to(self.device)
 
-        self.aa_weights = torch.as_tensor([0.31657471, 0.96925363, 0.98297024, 0.98832418, 0.98052505,
-       0.99623613, 0.98924219, 0.97989413, 0.97366834, 0.99191177,
-       0.98279196, 0.97022777, 0.98471806, 0.99245229, 0.98858837,
-       0.98471233, 0.98197448, 0.98253395, 0.99545816, 0.9910603 ,
-       0.97688197, 0.1, 0.1])
+    #     self.aa_weights = torch.as_tensor([0.31657471, 0.96925363, 0.98297024, 0.98832418, 0.98052505,
+    #    0.99623613, 0.98924219, 0.97989413, 0.97366834, 0.99191177,
+    #    0.98279196, 0.97022777, 0.98471806, 0.99245229, 0.98858837,
+    #    0.98471233, 0.98197448, 0.98253395, 0.99545816, 0.9910603 ,
+    #    0.97688197, 0.1, 0.1]) old
+        
+        self.aa_weights = torch.as_tensor([0.0240, 0.0462, 0.0468, 0.0471, 0.0467, 0.0474, 0.0471, 0.0467, 0.0464,
+        0.0472, 0.0468, 0.0462, 0.0469, 0.0473, 0.0471, 0.0469, 0.0468, 0.0468,
+        0.0474, 0.0472, 0.0465, 0.0194, 0.0194]) # softmaxed
 
     def train(self, EPOCHS=15, EPOCH_SIZE=10000, BATCH_SIZE=5, lr=1e-3, s=3, wab=False, p=0.5, target_mask=0.15, mask_rate=0.5, verbose_step=50, checkpoint_backprop=True, scaleing=True):
         EPOCH_STEPS = int(EPOCH_SIZE / BATCH_SIZE)
