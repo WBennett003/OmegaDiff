@@ -29,7 +29,7 @@ def plot_AA_confusion(Y_true, Y_pred, annot=False, get_figure=False):
     labels = list(tokeniser.AA.keys())
     n_AAs = len(labels)
 
-    fig, ax = plt.subplots(3, gridspec_kw={'height_ratios': [2, 1, 1]}, figsize=(8,20))
+    fig, ax = plt.subplots(3, gridspec_kw={'height_ratios': [2, 1, 1]}, figsize=(8,15))
     
     uniques = np.arange(n_AAs)
     blank = np.zeros(n_AAs)

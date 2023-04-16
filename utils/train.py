@@ -2,8 +2,6 @@ import torch
 
 class Mutant_samplers:
     def __init__(self, length=1280, batch_size=5, token_size=23, targets=0.15, mutate_rate=0.1, mask_rate=0.8, device=None):
-        
-        assert mutate_rate + mask_rate < 1 / "to high mutate and mask rates it must be less than 1"
 
         self.length = length
         self.batch_size = batch_size 
@@ -13,19 +11,18 @@ class Mutant_samplers:
         self.mutate_length = int(self.tar_length*mutate_rate)
         self.mask_length = int(self.tar_length*mask_rate)
 
-        self.mask_aas = torch.as_tensor([21], dtype=torch.long, device=device).repeat(self.mask_length).repeat(self.batch_size).reshape((self.batch_size, self.mask_length))
+        self.mask_aas = torch.as_tensor([21], dtype=torch.long, device=device).repeat(self.mask_length)
         self.blank_mask = torch.ones((self.batch_size, self.length), dtype=torch.float, device=device)
 
-    def mutate_sample(self, x):
-        assert self.batch_size == x.shape[0]
-
+    def sample(self, x):
+        x = torch.clone(x)
         for i in range(self.batch_size):
             idxs = torch.randperm(self.length)
             tars = idxs[:self.tar_length]
 
             mutates, _ = torch.sort(tars[:self.mutate_length])
             mask_idx, _ = torch.sort(tars[self.mutate_length:self.mutate_length+self.mask_length])
-            mutant_aas = torch.randint(0, self.token_size-1, (self.batch_size, self.mutate_length), device=x.device)
+            mutant_aas = torch.randint(low=0, high=self.token_size-1, size=tuple([self.mutate_length]), device=x.device)
 
             x[i, mutates] = mutant_aas
             x[i, mask_idx] = self.mask_aas
@@ -37,7 +34,6 @@ class Mutant_samplers:
 
 class Mask_sampler:
     def __init__(self, length=1280, batch_size=5, targets=0.15, mask_rate=0.5, device=None):
-        
 
         self.length = length
         self.batch_size = batch_size 
@@ -53,6 +49,7 @@ class Mask_sampler:
     def sample(self, x):
         
         mask = self.blank_mask
+        x = torch.clone(x)
 
         for i in range(self.batch_size):
             idxs = torch.randperm(self.length, device=x.device)
