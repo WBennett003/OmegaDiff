@@ -77,6 +77,7 @@ class Enzyme:
 
 
         if wab:
+            
             wandb.init(
             # set the wandb project where this run will be logged
             project="OmegaDiff",
@@ -146,12 +147,12 @@ class Enzyme:
                         "lr" : schedular.get_last_lr()[0]
                   })
             
-            # self.log(epoch, (loss_sum/EPOCH_STEPS).item(), BATCH_SIZE, wab)
+            self.log(epoch, (loss_sum/EPOCH_STEPS).item(), BATCH_SIZE, wab=wab)
 
     def log(self, epoch, train_loss, batch_size, wab=False):
         self.save_weights(self.model_weight_dir+'_'+str(epoch)+'.pt')
-        val_loss, val_acc, seq_txt, pred_seq_txt, accension = self.evaluate(batch_size)
-
+        val_loss, val_acc, seq_txt, pred_seq_txt, accension, distribution_fig = self.evaluate(batch_size)
+        
 
         print(f"Epoch {epoch} : {time.ctime(time.time())} : train_loss {train_loss} : val_loss {val_loss} : val_acc {val_acc}")
 
@@ -164,7 +165,8 @@ class Enzyme:
                 "val_acc" : val_acc,
                 "seq_text" : seq_txt,
                 "pred_seq_text" : pred_seq_txt, 
-                "accension" : accension,
+                "accension" : list(accension),
+                "distribution" : wandb.Image(distribution_fig)
             }
             )
 
@@ -211,7 +213,10 @@ class Enzyme:
         
         seq_txt = [self.tokeniser.token_to_string(i) for i in seq]
         pred_seq_txt = [self.tokeniser.token_to_string(i) for i in pred_seq.argmax(-1)]
-        return loss, acc, seq_txt, pred_seq_txt, accension
+
+        fig = visualise.plot_AA_confusion(seq, pred_seq.argmax(-1), get_figure=False)
+
+        return loss, acc, seq_txt, pred_seq_txt, accension, fig
     
     def visualise_pairs_matrix(self, pair_matrix, figsize=(20,8)):
         bs = pair_matrix.shape[0]
@@ -234,6 +239,7 @@ def train():
     start = time.time()
     runner.train(EPOCHS=1, EPOCH_SIZE=4, BATCH_SIZE=2, lr=1e-4, s=1, wab=False, verbose_step=1, scaleing=False)
     print(f" Done in {time.time()-start}s")
+
 
 if __name__ =='__main__':
     train()

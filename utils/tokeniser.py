@@ -2,6 +2,7 @@
 class Tokeniser:
   def __init__(self):
     self.AA = {
+    "-" : 0,
     "A" : 1,
     "R" : 2,
     "N" : 3,
@@ -23,11 +24,11 @@ class Tokeniser:
     "Y" : 19,
     "V" : 20,
     "*" : 21,
-    "-" : 0,
     "?" : 22,
 
     }
     self.inverse_AA = {
+      0 : "-",
       1 : "A",
       2 : "R",
       3 : "N",
@@ -49,7 +50,6 @@ class Tokeniser:
       19 : "Y",
       20 : "V",
       21 : "*",
-      0 : "-",
       22 : "?",
     }
 
