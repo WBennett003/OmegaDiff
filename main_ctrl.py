@@ -28,7 +28,7 @@ class Enzyme:
         self.model_weight_dir = model_weight_dir
 
         self.tokeniser = Tokeniser()
-        self.ds = dataset_h5(ds_file)
+        self.ds = dataset_h5(ds_file, device)
         
         length = len(self.ds)
         
@@ -59,7 +59,7 @@ class Enzyme:
         
         self.aa_weights = torch.as_tensor([0.0240, 0.0462, 0.0468, 0.0471, 0.0467, 0.0474, 0.0471, 0.0467, 0.0464,
         0.0472, 0.0468, 0.0462, 0.0469, 0.0473, 0.0471, 0.0469, 0.0468, 0.0468,
-        0.0474, 0.0472, 0.0465, 0.0194, 0.0194]) # softmaxed
+        0.0474, 0.0472, 0.0465, 0.0194, 0.0194], device=self.device) # softmaxed
 
     def train(self, EPOCHS=15, EPOCH_SIZE=10000, BATCH_SIZE=5, lr=1e-3, s=3, wab=False, p=0.5, target_mask=0.15, mask_rate=0.5, verbose_step=50, checkpoint_backprop=True, scaleing=True):
         EPOCH_STEPS = int(EPOCH_SIZE / BATCH_SIZE)
@@ -117,12 +117,12 @@ class Enzyme:
                 if self.device.type == 'cuda' and scaleing: # Apparently fixed if statement doesn't effect perforance largely?
                     with torch.cuda.amp.autocast(): # speeds up by using f16 instead of f32 https://pytorch.org/blog/accelerating-training-on-nvidia-gpus-with-pytorch-automatic-mixed-precision/ 
                         y_hat = self.Model(x, rxn, mask=mask, fwd_cfg=self.fwd_cfg, s=s)
+                        loss = loss_func(y_hat.permute(0, 2, 1),Xtokens)
+
                 else:
                     y_hat = self.Model(x, rxn, mask=mask, fwd_cfg=self.fwd_cfg, s=s)
+                    loss = loss_func(y_hat.permute(0, 2, 1),Xtokens)
 
-                loss = loss_func(
-                    y_hat.permute(0, 2, 1),
-                    Xtokens)
 
                 if self.device.type == 'cuda' and scaleing:
                     scaler.scale(loss).backward() #scaler effecting the gradients
@@ -181,6 +181,9 @@ class Enzyme:
         if eval_size > self.val_length:
             eval_size = self.val_length
 
+        if batch_size > eval_size:
+            batch_size = eval_size
+
         batch_steps = int(eval_size/batch_size)
         if batch_steps < 1:
             batch_steps = 1
@@ -214,7 +217,7 @@ class Enzyme:
         seq_txt = [self.tokeniser.token_to_string(i) for i in seq]
         pred_seq_txt = [self.tokeniser.token_to_string(i) for i in pred_seq.argmax(-1)]
 
-        fig = visualise.plot_AA_confusion(seq, pred_seq.argmax(-1), get_figure=False)
+        fig = visualise.plot_AA_confusion(seq.cpu(), pred_seq.argmax(-1).cpu(), get_figure=False)
 
         return loss, acc, seq_txt, pred_seq_txt, accension, fig
     
