@@ -1,0 +1,54 @@
+{
+    "model-config" : {
+        "amino-acid-token-size" : 23,
+        "chemical-reaction-hash-size" : 10240,
+        "omegaplm-layers" : 1,
+        "save_weights_dir" : "weights/model.pt",
+        "load_weights_dir" : "weights/model.pt",
+        "load_crep_weights_dir" : "weights/crep.pt"
+    },
+    "dataset-config" : {
+        "dataset_dir" : "datasets/enzyme_data.h5"
+    },
+    "pre-training-config" : {
+        "epochs" : 5,
+        "epoch_size" : 20000,
+        "batch_size" : 10,
+        "learning-rate" : 1e-4,
+        "verbose-step-size" : 500,
+        "scale-gradients" : true,
+        "schedule_type" : "one" ,
+        "wandb-logging" : true
+    },
+    "training-config" : {
+        "mutant-training" : {
+            "epochs" : 5,
+            "epoch_size" : 20000,
+            "batch_size" : 5,
+            "learning-rate" : 1e-4,
+            "classifier-guidance" : 1,
+            "verbose-step-size" : 20,
+            "scale-gradients" : true,
+            "sampler" : "mutant",
+            "target_mask_size" : 0.15,
+            "mutate_target_pct" : 0.1,
+            "mask_target_pct" : 0.8
+
+        },
+        "half-mask-training" : {
+            "epochs" : 5,
+            "epoch_size" : 20000,
+            "batch_size" : 5,
+            "learning-rate" : 1e-4,
+            "classifier-guidance" : 1,
+            "verbose-step-size" : 20,
+            "scale-gradients" : true,
+            "sampler" : "mutant",
+            "target_mask_size" : 0.15,
+            "mutate_target_pct" : 0.1,
+            "mask_target_pct" : 0.8
+
+        },
+
+    }
+}

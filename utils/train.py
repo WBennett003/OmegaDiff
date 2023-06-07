@@ -1,5 +1,7 @@
 import torch
 
+MASK_IDX = 22
+
 class Mutant_samplers:
     def __init__(self, length=1280, batch_size=5, token_size=23, targets=0.15, mutate_rate=0.1, mask_rate=0.8, device=None):
 
@@ -11,7 +13,7 @@ class Mutant_samplers:
         self.mutate_length = int(self.tar_length*mutate_rate)
         self.mask_length = int(self.tar_length*mask_rate)
 
-        self.mask_aas = torch.as_tensor([21], dtype=torch.long, device=device).repeat(self.mask_length)
+        self.mask_aas = torch.as_tensor([MASK_IDX], dtype=torch.long, device=device).repeat(self.mask_length)
         self.blank_mask = torch.ones((self.batch_size, self.length), dtype=torch.float, device=device)
 
     def sample(self, x):
@@ -27,7 +29,7 @@ class Mutant_samplers:
             x[i, mutates] = mutant_aas
             x[i, mask_idx] = self.mask_aas
             mask = self.blank_mask
-            mask[i, mask_idx] = 0.
+            mask[i, mask_idx] = 0
 
         return x, mask
     
@@ -43,7 +45,7 @@ class Mask_sampler:
 
         self.indexes = torch.arange(0, self.length, dtype=torch.long, device=device).repeat(self.batch_size).reshape((self.batch_size, self.length))
         
-        self.mask_aas = torch.as_tensor([21], dtype=torch.long, device=device).repeat(self.mask_length)
+        self.mask_aas = torch.as_tensor([MASK_IDX], dtype=torch.long, device=device).repeat(self.mask_length)
         self.blank_mask = torch.ones((self.batch_size, self.length), dtype=torch.float, device=device)
 
     def sample(self, x):
@@ -62,6 +64,33 @@ class Mask_sampler:
 
         return x, mask
     
+# class Half_sampler:
+#     def __init__(self, length=1280, batch_size=5, device=None):
+
+#         self.length = length
+#         self.batch_size = batch_size 
+
+#         self.mask_aas = torch.as_tensor([MASK_IDX], dtype=torch.long, device=device).repeat(self.mask_length)
+
+#     def sample(self, x):
+        
+#         idx = x.argmin()
+
+#         return x, mask
+
+class Active_sampler:
+    def active_knockout_sample(self, x, active_mask):
+        x = torch.clone(x)
+        x[active_mask.bool()] = MASK_IDX
+        return x
+
+class Scaffold_sampler:
+    def scaffold_knockout_sample(self, x, active_mask):
+        x = torch.clone(x)
+        x[(1-active_mask).bool()] = MASK_IDX
+        return x
+
+
 def test_mask_sampler():
     sam = Mask_sampler(1280, 3, 0.15, 0.5)
     a = torch.randint(0, 23, (3, 1280))
@@ -75,5 +104,16 @@ def test_mask_sampler():
     sns.heatmap(x)
     plt.show()
 
+def test_active_sampler():
+    a = torch.randint(0, 23, (3, 1280))
+    active_mask = torch.zeros_like(a)
+    active_mask[:, 5] = 1
+    active_mask[:, 8] = 1
+    active_mask[:, 10] = 1
+    AS = Active_sampler()
+    x = AS.scaffold_knockout_sample(a, active_mask)
+    x = AS.active_knockout_sample(a, active_mask)
+    pass
+
 if __name__ =='__main__':
-    test_mask_sampler()
+    test_active_sampler()

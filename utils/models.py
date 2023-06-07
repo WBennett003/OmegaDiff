@@ -6,6 +6,8 @@ import math
 from omegafold.omegaplm_cond import OmegaPLM
 from omegafold.geoformer_cond import GeoFormer
 
+from utils.CREP import CREP
+
 device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
 class Embedder(torch.nn.Module):
@@ -156,11 +158,9 @@ class Conditioner(torch.nn.Module):
 
         return cond
 
-        # return node_plm, edge_plm
-        return node_repr, edge_repr
 
 class OmegaCond(nn.Module):
-    def __init__(self, cfg, t_steps=200, chem_size=2048, hidden_size=2048, cfg_geo=None):
+    def __init__(self, cfg, t_steps=200, chem_size=2048, hidden_size=2048, cfg_geo=None, CREP=None):
         super().__init__()
         
         d_model = cfg.node
@@ -210,9 +210,9 @@ class OmegaCond(nn.Module):
 
         # _, ei, xi = self.geoformer(xi, ei, mask, fwd_cfg)
         xj = self.null_forward(xt, t, mask, fwd_cfg)
-
-        x = xj + s * (xi - xj)
-        return x
+        diff = (xi - xj)
+        x = xj + s * diff
+        return x, diff
     
     def null_forward(self, xt, t, mask=None, fwd_cfg=None):
         if mask is None:
@@ -236,6 +236,7 @@ class Conditioner_Ctrl(torch.nn.Module):
             nn.Linear(hidden_size, d_model),
             nn.SiLU()
         )
+
         self.mask_MLP = nn.Sequential(
             nn.Linear(d_model, d_model),
             nn.SiLU(),
@@ -260,19 +261,28 @@ class Conditioner_Ctrl(torch.nn.Module):
         return cond
 
 class OmegaCtrl(nn.Module):
-    def __init__(self, cfg, token_size=23, chem_size=2048, hidden_size=2048, cfg_geo=None, checkpoint_backprop=False, embed_file='weights/embed.pt'):
+    def __init__(self, cfg, token_size=23, chem_size=2048, checkpoint_backprop=False, embed_file='weights/embed.pt', clippy=None, cofactor={}):
         super().__init__()
         
         d_model = cfg.node
         sequence = cfg.node
 
-        self.embedder = Embedder(token_size, d_model=d_model, file_name=embed_file, freeze=True)
+        # self.embedder = Embedder(token_size, d_model=d_model, file_name=embed_file, freeze=True)
+        # self.condition = Conditioner_Ctrl(chem_size, hidden_size, d_model, sequence)
+        if clippy is None:
+            self.CREP = CREP(token_size, chem_size, d_model, cofactor) #reaction-enzyme pre-training
+        else:
+            self.CREP = clippy
 
-        self.condition = Conditioner_Ctrl(chem_size, hidden_size, d_model, sequence)
-        
+        self.mask_MLP = nn.Sequential(
+            nn.Linear(d_model, d_model),
+            nn.SiLU(),
+            nn.Linear(d_model, d_model),
+            nn.SiLU()
+        )
+
         #Modified OmegaFold modules
         self.omega_plm = OmegaPLM(cfg)
-        # self.geoformer = GeoFormer(cfg_geo)
 
         self.out = nn.Linear(d_model, token_size)
 
@@ -291,42 +301,29 @@ class OmegaCtrl(nn.Module):
                 new_state_dict[k[10:]] = w[k]
 
         self.omega_plm.load_state_dict(new_state_dict)
-        
-#         new_state_dict = {}
-        
-#         for k in geo.keys():
-#             new_state_dict[k] = geo[k]
-
-#         for k in geo.keys():
-#             if k[:10] == 'geoformer.':
-#                 new_state_dict[k[10:]] = w[k]
-
-#         self.geoformer.load_state_dict(new_state_dict)
-
-        # self.embedder.load_state_dict('OmegaDiff/weights/embed.pt')
+    
+    def initalise_crep(self, crep_dir='weights/crep_model.py'):
+        self.CREP.load_state_dict(torch.load(crep_dir))
         
 
-    def forward(self, xt, rxn, mask=None, fwd_cfg=None, s=1):
+    def forward(self, enz, rxn, mask=None, fwd_cfg=None):
         if mask is None:
-            mask = torch.zeros(xt.shape[:2], device=xt.device)
-        
-        cond = self.condition(rxn, mask)
-        xt = self.embedder(xt)
-        xi, ei = self.omega_plm(xt, mask, cond, fwd_cfg)
-        # _, ei, xi = self.geoformer(xi, ei, mask, fwd_cfg)
+            mask = torch.zeros(enz.shape[:2], device=enz.device)
+
+        enz = self.CREP.enzyme_enc_forward(enz)
+        rxn = self.CREP.reaction_enc_forward(rxn)
+        mask = self.mask_MLP(mask)
+        cond = rxn + mask
+
+        xi, ei = self.omega_plm(enz, mask, cond, fwd_cfg)
         xi = self.out(xi)
-        xj = self.null_forward(xt, mask, fwd_cfg)
-        x = xj + s * (xi - xj)
-        x = x.softmax(-1)
-        return x
+
+        return xi
     
-    def null_forward(self, xt, mask=None, fwd_cfg=None):
+    def forward_guidance(self, xt, rxn, mask=None, fwd_cfg=None, s=1):
         if mask is None:
             mask = torch.zeros(xt.shape[:2], device=xt.device)
-
-        cond = self.condition.null_forward(xt.shape[0], xt.device)
-        xj, ej = self.omega_plm(xt, mask, cond, fwd_cfg)
-        # _, ej, xj = self.geoformer(xj, ej, mask, fwd_cfg)
-        xj = self.out(xj)
-        return xj
-    
+        xi = self.forward(xt, rxn, mask, fwd_cfg)
+        xj = self.forward(xt, torch.zeros(rxn.shape, device=rxn.device, dtype=rxn.dtype), torch.zeros(mask.shape, device=mask.device, dtype=mask.dtype), fwd_cfg)
+        x = xj + s * (xi - xj)
+        return x, (xi - xj).detach()
