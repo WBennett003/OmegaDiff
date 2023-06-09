@@ -1,0 +1,1 @@
+https://rest.uniprot.org/uniprotkb/search?format=json&query=GO:0003824&cursor=2f561rfhkkjb27u5f0nymtii7m5tvqnejql5m0nfpgntozp9w9ep703h&size=500

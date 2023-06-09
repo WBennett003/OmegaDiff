@@ -84,14 +84,19 @@ def get_rhea(rhea_id, url='https://www.rhea-db.org/rhea/?query='):
 
 def get_pdb(pdb_code, url='https://files.rcsb.org/download/', dir='datasets/pdb/'):
     if not os.path.isfile(dir+pdb_code+'.pdb'):
+        if len(pdb_code) != 4:
+            url = url+pdb_code+'.pdb'
+        else:
+            url = f"https://alphafold.ebi.ac.uk/files/AF-{pdb_code}-F1-model_v4.pdb"
         res = requests.get(url+pdb_code+'.pdb').text
+        if res[0] == '<':#got http file
+            return
         with open(dir+pdb_code+'.pdb', 'w+') as f:
             f.write(res)
-        
 
 class dataset():
     def __init__(self, 
-    max_mol_size = 1000, max_aa_seq = 5000, file_dir = 'datasets/raw_enzyme_data', max_samples=5000000, checkpoint=True, workers=100000):
+    max_mol_size = 1000, max_aa_seq = 5000, file_dir = 'datasets/raw_enzyme_data', max_samples=5000000, checkpoint=True, workers=20000):
         self.max_mol_size = max_mol_size
         self.max_aa_seq = max_aa_seq        
         self.file_dir = file_dir
@@ -147,9 +152,6 @@ def get_enzyme(data, worker_id):
     data = dict(data.json())['results']
     count = 0
     for sample in data:
-        cfs = ''
-
-
         accension = sample['primaryAccession']
         uniprot_id = sample['uniProtkbId']
         sequence = sample['sequence']['value']
@@ -162,6 +164,8 @@ def get_enzyme(data, worker_id):
 
         equation, chebi_equation, reactants, products = '', '', '', '' #to check if cross ref is present
         if 'comments' in sample.keys():
+            cata = []
+            cfs = []
             for comms in sample['comments']:
                 if comms['commentType'] == 'CATALYTIC ACTIVITY':
                     if 'ecNumber' in comms['reaction'].keys():
@@ -176,15 +180,20 @@ def get_enzyme(data, worker_id):
                                 Rhea_id = db['id']
                                 equation, chebi_equation, reactants, products = get_rhea(Rhea_id)
                                 reactants_smiles, products_smiles, smile_reaction = process_mols(reactants, products)
+                                if reactants_smiles != '':
+                                    cata.append(
+                                        [ec_id, Rhea_id, equation, chebi_equation, smile_reaction, reactants_smiles, products_smiles]
+                                    )
 
                 elif comms['commentType'] == 'COFACTOR':
                     if 'cofactors' not in comms.keys():
                         print(comms)
-                    cfs = []
-                    for cofactor in comms['cofactors']:
-                        id = cofactor['cofactorCrossReference']['id']
-                        cfs.append(id)
-                    cfs = '_'.join(cfs)
+                    else:
+
+                        for cofactor in comms['cofactors']:
+                            id = cofactor['cofactorCrossReference']['id']
+                            cfs.append(id)
+            cfs = '_'.join(cfs)
 
             if 'features' in sample.keys():
                 feat = []
@@ -221,40 +230,24 @@ def get_enzyme(data, worker_id):
                             '_'.join(['Mod', start, end, res])
                         )
 
-                    # Will probably remove ss as they are rarely added to the data and i will extract the ss from PDB directly with 3d cords
-                    # elif feature['type'] == 'Helix':
-                    #     start = feature["location"]['start']['value']
-                    #     end = feature["location"]['end']['value']
-                    #     feat.append(
-                    #         ['Helix', start, end].join('-')
-                    #     )
-                    
-                    # elif feature['type'] == 'Beta strand':
-                    #     start = feature["location"]['start']['value']
-                    #     end = feature["location"]['end']['value']
-                    #     feat.append(
-                    #         ['Beta', start, end].join('-')
-                    #     )
-
-                    # elif feature['type'] == 'Turn':
-                    #     start = feature["location"]['start']['value']
-                    #     end = feature["location"]['end']['value']
-                    #     feat.append(
-                    #         ['Trun', start, end].join('-')
-                    #     )
                 feat = '~'.join(feat)
-                pdb_code = ''
-                alphafold_code = ''
+                pdb_code = []
+                alphafold_code = []
                 for db in sample['uniProtKBCrossReferences']:
                     if db['database'] == 'PDB':
-                        pdb_code = db['id']
+                        pdb_code.append(db['id'])
                     elif db['database'] == 'AlphaFoldDB':
-                        alphafold_code = db['id']
-                if pdb_code == '' and alphafold_code != '':
-                    pdb_code = alphafold_code
+                        alphafold_code.append(db['id'])
+                if len(pdb_code) > 0:
+                    pdb_code = pdb_code[0]
+                elif pdb_code == [] and alphafold_code != []:
+                    pdb_code = alphafold_code[0]
+                else:
+                    pdb_code = ''
 
 
-            if equation != '' and  smile_reaction != '':
+            for c in cata:
+                ec_id, Rhea_id, equation, chebi_equation, smile_reaction, reactants_smiles, products_smiles = c
                 row = [
                     accension, uniprot_id, sequence, str(seq_len), str(tax_id), name, ec_id, equation, chebi_equation, smile_reaction, reactants_smiles, products_smiles, Rhea_id, feat, pdb_code, cfs
                 ]
@@ -263,7 +256,7 @@ def get_enzyme(data, worker_id):
                 with open('datasets/raw_enzyme_data.tsv', 'a') as f:
                     f.write(row+'\n')
                 count += 1
-                get_pdb(pdb_code)
+            get_pdb(pdb_code)
     return count
 
 

@@ -170,10 +170,34 @@ class OmegaPLMLayer(modules.OFModule):
         node = node + shortcut
         return node, edge
 
-@torch.jit.script
+@torch.jit.script #creates a kernal to make this a single opperation rather than 2 or 3 idk if 1+ counts
 def scale_shift(x, scale, shift):
     return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
 
+class OmegaPLMBatchedchkp(torch.nn.Module): #to optimize chkping to decrease Gram usage for processing time
+    def __init__(self, cfg, n_layers):
+        super().__init__()
+        self.layers = nn.ModuleList([OmegaPLMLayer(cfg) for _ in range(n_layers)])
+
+    def forward(self,
+            node: torch.Tensor,
+            qk_scaling: torch.Tensor,
+            bias: torch.Tensor,
+            cond : torch.Tensor,
+            fwd_cfg: typing.Optional[argparse.Namespace]
+    ) -> typing.Tuple[torch.Tensor, torch.Tensor]:
+        for layer in self.layers:
+            node, _ = layer(node, qk_scaling, bias, cond, fwd_cfg)
+        return node, _
+    
+    def chkp_forwad(self,
+            node: torch.Tensor,
+            qk_scaling: torch.Tensor,
+            bias: torch.Tensor,
+            cond : torch.Tensor,
+            fwd_cfg: typing.Optional[argparse.Namespace]
+    ) -> typing.Tuple[torch.Tensor, torch.Tensor]:
+        return torch.utils.checkpoint.checkpoint(self.forward(node, qk_scaling, bias, cond, fwd_cfg))
 
 class OmegaPLM(modules.OFModule):
     """Encoder GAU model

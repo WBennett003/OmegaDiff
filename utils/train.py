@@ -79,13 +79,13 @@ class Mask_sampler:
 #         return x, mask
 
 class Active_sampler:
-    def active_knockout_sample(self, x, active_mask):
+    def sample(self, x, active_mask):
         x = torch.clone(x)
         x[active_mask.bool()] = MASK_IDX
         return x
 
 class Scaffold_sampler:
-    def scaffold_knockout_sample(self, x, active_mask):
+    def sample(self, x, active_mask):
         x = torch.clone(x)
         x[(1-active_mask).bool()] = MASK_IDX
         return x

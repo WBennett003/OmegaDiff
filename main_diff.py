@@ -111,9 +111,9 @@ class Enzyme:
 
                 if self.device.type == 'cuda' and scaleing: # Apparently fixed if statement doesn't effect perforance largely?
                     with torch.cuda.amp.autocast(): # speeds up by using f16 instead of f32 https://pytorch.org/blog/accelerating-training-on-nvidia-gpus-with-pytorch-automatic-mixed-precision/
-                        y_hat = self.Model(xt, ts, rxn, mask=mask, fwd_cfg=self.fwd_cfg, s=s) # incase of non-checkpoint runs
+                        y_hat, guided_delta = self.Model(xt, ts, rxn, mask=mask, fwd_cfg=self.fwd_cfg, s=s) # incase of non-checkpoint runs
                 else:            
-                    y_hat = self.Model(xt, ts, rxn, mask=mask, fwd_cfg=self.fwd_cfg, s=s) # incase of non-checkpoint runs
+                    y_hat, guided_delta = self.Model(xt, ts, rxn, mask=mask, fwd_cfg=self.fwd_cfg, s=s) # incase of non-checkpoint runs
 
 
                 loss = loss_func(y_hat, noise)
@@ -208,7 +208,7 @@ class Enzyme:
         
         t = torch.tensor([t], device=xt.device).repeat(batch_size)
         with torch.no_grad():
-            noise = self.Model(xt, t, rxn, mask, self.fwd_cfg, s=guidance)
+            noise, guided_delta = self.Model(xt, t, rxn, mask, self.fwd_cfg, s=guidance)
         xt = self.diffusion.p_sample(xt, t, 1, noise)
         return xt
     

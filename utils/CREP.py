@@ -59,7 +59,7 @@ class CREP(nn.Module):
         self.norm_e = nn.LayerNorm(d_model)
         self.norm_r = nn.LayerNorm(d_model)
         
-        self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.07))
+        # self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.07))
         pass
 
     def forward(self, enz_z, react_z):
@@ -69,7 +69,7 @@ class CREP(nn.Module):
         enz_z = self.norm_e(enz_z)
         react_z = self.norm_r(react_z).unsqueeze(1) # [b, e] -> [b, None, e]
 
-        logits = torch.einsum('ijk, blk -> ib', enz_z, react_z) * torch.exp(self.logit_scale)
+        logits = torch.einsum('ijk, blk -> ib', enz_z, react_z) #* torch.exp(self.logit_scale)
         # logits = logits * torch.exp(self.logit_scale)# [b, s, e] . [b, None, e] -> [b, b]
         return logits
 

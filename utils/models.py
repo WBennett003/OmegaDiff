@@ -304,9 +304,8 @@ class OmegaCtrl(nn.Module):
     
     def initalise_crep(self, crep_dir='weights/crep_model.py'):
         self.CREP.load_state_dict(torch.load(crep_dir))
-        
 
-    def forward(self, enz, rxn, mask=None, fwd_cfg=None):
+    def ff(self, enz, rxn, mask=None, fwd_cfg=None):
         if mask is None:
             mask = torch.zeros(enz.shape[:2], device=enz.device)
 
@@ -320,10 +319,10 @@ class OmegaCtrl(nn.Module):
 
         return xi
     
-    def forward_guidance(self, xt, rxn, mask=None, fwd_cfg=None, s=1):
+    def forward(self, xt, rxn, mask=None, fwd_cfg=None, s=1):
         if mask is None:
             mask = torch.zeros(xt.shape[:2], device=xt.device)
-        xi = self.forward(xt, rxn, mask, fwd_cfg)
-        xj = self.forward(xt, torch.zeros(rxn.shape, device=rxn.device, dtype=rxn.dtype), torch.zeros(mask.shape, device=mask.device, dtype=mask.dtype), fwd_cfg)
+        xi = self.ff(xt, rxn, mask, fwd_cfg)
+        xj = self.ff(xt, torch.zeros(rxn.shape, device=rxn.device, dtype=rxn.dtype), torch.zeros(mask.shape, device=mask.device, dtype=mask.dtype), fwd_cfg)
         x = xj + s * (xi - xj)
-        return x, (xi - xj).detach()
+        return x 

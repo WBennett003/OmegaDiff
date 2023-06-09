@@ -90,3 +90,62 @@ def AminoAcid_tokenise(sequence, max_length):
     blank = np.zeros(max_length)
     blank[:len(x)] = x
     return blank
+
+
+def process_pdb(pdb, dir='datasets/pdb/', max_seq=1280, accension=''):
+    xyz = np.zeros((max_seq,3))
+    ss = np.zeros(max_seq) # 0 (none), 1-10 (helices), 
+    chain_mask = np.zeros(max_seq)
+    chains = { #example 
+            '[START]' : {
+            'start' : 0,
+            'end' : 0,
+            'shift' : 0,
+        }}
+    
+    chain_idx = 0
+    current_shift = 0
+
+    with open(dir+pdb+'.pdb', 'r') as f:
+        for line in f.readlines:
+            if line[:5] == 'HELIX': #helix is 1
+                i = line[20:25] - 1 #residues starts at 1 so -1 to return idx to 0
+                j = line[33:37] - 1
+                helix_class = line[38:49] # there are 10 helix classes
+                ss[i:j] = helix_class
+
+            elif line[:5] == 'SHEET': # sheet is 2
+                i = int(line[22:26])
+                j = int(line[33:36])
+                sense = int(line[38:40]) #11 is antiparallel, 12 is start stand, 13 is parallel
+                ss[i:j] = 12 + sense
+
+            elif line[:3] == 'ATOM' and line[14:16] == 'CA':
+                i = int(line[22:25])
+                x = float(line[33:39])
+                y = float(line[41:47])
+                z = float(line[49:55])
+                chain_ids = line[21]
+                if chain_ids in chains.keys():
+                    i = i + chains[chain_ids]['shift'] - chains[chain_ids]['start']
+                    chain_idx = chains.keys().index(chain_ids)
+                    xyz[i, 0] = x
+                    xyz[i, 1] = y
+                    xyz[i, 2] = z
+                    chain_mask[i] = chain_idx
+
+
+            elif line[:5] == 'DBREF':
+                chain = line[12]
+                start = int(line[13:18])
+                end = int(line[18:23])
+                acc = line[33:39]
+                db = line[26:29]
+                if db =='UNP' and acc == accension:
+                    current_shift += end-start + 1
+                    chains[chain] = {
+                            'start': start,
+                            'end' : end,
+                            'shift' : current_shift
+                        }
+                    
